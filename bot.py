@@ -154,7 +154,7 @@ source_channels = channel_ids.source_channel_1 + channel_ids.source_channel_2 + 
 steallootdealUser     .add_event_handler(sender_bH, events.NewMessage(incoming=True, chats=source_channels))
 
 # Start the message processor
-asyncio.create_task(message_processor())
+steallootdealUser.loop.create_task(message_processor())
 
 # Run the bot
 print("Bot has started.")
