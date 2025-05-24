@@ -9,6 +9,9 @@ import asyncio
 # Configure logging
 logging.basicConfig(format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s', level=logging.INFO)
 
+# Initialize message queue
+message_queue = asyncio.Queue()
+
 # Read configuration from environment variables
 APP_ID = config("API_ID", cast=int)
 API_HASH = config("API_HASH")
@@ -93,38 +96,65 @@ SOURCE_DESTINATION_MAP = channel_ids.get_source_destination_map()
 # Event handler for incoming messages
 async def sender_bH(event):
     try:
-        source_channel = str(event.chat_id)
-        destination_channels = SOURCE_DESTINATION_MAP.get(int(source_channel), [])
-
-        tasks = []
-        for dest_channel in destination_channels:
-            try:
-                # Check for blocked text using lowercase version of the message
-                if event.raw_text and any(blocked_text in event.raw_text.lower() for blocked_text in BLOCKED_TEXTS):
-                    logging.warning(f"Blocked message containing one of the specified texts: {event.raw_text}")
-                    continue
-
-                # For media messages, check if forwarding is allowed
-                if event.media and MEDIA_FORWARD_RESPONSE != 'yes':
-                    logging.info(f"Media forwarding skipped by user for message ID {event.message.id}")
-                    continue
-
-                # Forward the message as is, dropping the author to remove the forward tag
-                task = asyncio.create_task(steallootdealUser.forward_messages(dest_channel, event.message, drop_author=True))
-                tasks.append(task)
-                logging.info(f"Forwarding message ID {event.message.id} to channel {dest_channel} without forward tag")
-
-            except Exception as e:
-                logging.error(f"Error forwarding message ID {event.message.id} to channel {dest_channel}: {e}")
-
-        await asyncio.gather(*tasks)
-
+        source_channel_id = event.chat_id
+        destination_channels = SOURCE_DESTINATION_MAP.get(source_channel_id, []) 
+        
+        if destination_channels:
+            await message_queue.put((event, destination_channels))
+            logging.info(f"Message ID {event.message.id} from {source_channel_id} added to queue for {destination_channels}")
+        else:
+            logging.info(f"No destination configured for source channel {source_channel_id}. Message ID {event.message.id} dropped.")
+            
     except Exception as e:
-        logging.error(f"Error handling incoming message: {e}")
+        logging.error(f"Error in sender_bH adding message to queue: {e}")
+
+# Message processor
+async def message_processor():
+    while True:
+        try:
+            event, destination_channels = await message_queue.get()
+            logging.info(f"Processing message ID {event.message.id} from queue for destinations: {destination_channels}")
+            
+            tasks = []
+            for dest_channel in destination_channels:
+                try:
+                    # Check for blocked text using lowercase version of the message
+                    if event.raw_text and any(blocked_text in event.raw_text.lower() for blocked_text in BLOCKED_TEXTS):
+                        logging.warning(f"Blocked message ID {event.message.id} containing one of the specified texts: {event.raw_text}")
+                        continue
+
+                    # For media messages, check if forwarding is allowed
+                    if event.media and MEDIA_FORWARD_RESPONSE != 'yes':
+                        logging.info(f"Media forwarding skipped by user for message ID {event.message.id}")
+                        continue
+
+                    # Forward the message as is, dropping the author to remove the forward tag
+                    task = asyncio.create_task(steallootdealUser.forward_messages(dest_channel, event.message, drop_author=True))
+                    tasks.append(task)
+                    logging.info(f"Forwarding message ID {event.message.id} to channel {dest_channel} without forward tag")
+
+                except Exception as e:
+                    logging.error(f"Error forwarding message ID {event.message.id} to channel {dest_channel}: {e}")
+            
+            if tasks:
+                await asyncio.gather(*tasks)
+            
+            message_queue.task_done()
+            logging.info(f"Finished processing message ID {event.message.id} from queue.")
+
+        except asyncio.CancelledError:
+            logging.info("Message processor task cancelled.")
+            break
+        except Exception as e:
+            logging.error(f"Error in message_processor: {e}")
+            await asyncio.sleep(1) # Add a small delay to prevent rapid error loops if persistent errors occur
 
 # Register event handler
 source_channels = channel_ids.source_channel_1 + channel_ids.source_channel_2 + channel_ids.source_channel_3 + channel_ids.source_channel_4 + channel_ids.source_channel_5 + channel_ids.source_channel_6 + channel_ids.source_channel_7 + channel_ids.source_channel_8 + channel_ids.source_channel_9
 steallootdealUser     .add_event_handler(sender_bH, events.NewMessage(incoming=True, chats=source_channels))
+
+# Start the message processor
+asyncio.create_task(message_processor())
 
 # Run the bot
 print("Bot has started.")
