@@ -5,4 +5,5 @@ echo "Setting up environment...."
 echo "Dependencies installed during Docker build."
 
 echo "Starting Bot...."
+gunicorn app:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8080 &
 python3 bot.py
