@@ -109,10 +109,10 @@ async def sender_bH(event):
                     logging.info(f"Media forwarding skipped by user for message ID {event.message.id}")
                     continue
 
-                # Forward the message as is
-                task = asyncio.create_task(steallootdealUser.forward_messages(dest_channel, event.message))
+                # Forward the message as is, dropping the author to remove the forward tag
+                task = asyncio.create_task(steallootdealUser.forward_messages(dest_channel, event.message, drop_author=True))
                 tasks.append(task)
-                logging.info(f"Forwarding message ID {event.message.id} to channel {dest_channel}")
+                logging.info(f"Forwarding message ID {event.message.id} to channel {dest_channel} without forward tag")
 
             except Exception as e:
                 logging.error(f"Error forwarding message ID {event.message.id} to channel {dest_channel}: {e}")
