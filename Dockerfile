@@ -22,5 +22,7 @@ WORKDIR /LazyDeveloper
 COPY . /LazyDeveloper/
 COPY start.sh /start.sh
 
+EXPOSE 8080
+
 # Running MessageSearchBot
 CMD ["/bin/bash", "/start.sh"]
