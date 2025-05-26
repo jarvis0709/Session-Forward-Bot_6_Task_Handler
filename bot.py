@@ -34,22 +34,22 @@ except Exception as ap:
     exit(1)
 
 # Define source and destination channels
-SOURCE_CHANNEL_1 = os.environ.get("SOURCE_CHANNEL_1", "-1002436625087") #All Hollywood movies
+SOURCE_CHANNEL_1 = os.environ.get("SOURCE_CHANNEL_1", "-1001927159396") #Ävåïlåßlê
 SOURCE_CHANNEL_2 = os.environ.get("SOURCE_CHANNEL_2", "-1001950252875") #Movie_mania
 SOURCE_CHANNEL_3 = os.environ.get("SOURCE_CHANNEL_3", "-1002045229088") #Movie_house
 SOURCE_CHANNEL_4 = os.environ.get("SOURCE_CHANNEL_4", "-1002603982843") #Japaneas_hub
 SOURCE_CHANNEL_5 = os.environ.get("SOURCE_CHANNEL_5", "-1001741122061") #DamselMovieDownload
-SOURCE_CHANNEL_6 = os.environ.get("SOURCE_CHANNEL_6", "-1002336841751") #All South Hindi dubbed movies
+SOURCE_CHANNEL_6 = os.environ.get("SOURCE_CHANNEL_6", "-1001808135797") #S0uth Mov!e Shorts
 SOURCE_CHANNEL_7 = os.environ.get("SOURCE_CHANNEL_7", "-1002607828329") #Instagram_links
 SOURCE_CHANNEL_8 = os.environ.get("SOURCE_CHANNEL_8", "-1002092938265") #Tera special Collectionn
 SOURCE_CHANNEL_9 = os.environ.get("SOURCE_CHANNEL_9", "-1002271035070") #testmmfilelog
 
-DESTINATION_CHANNEL_1 = os.environ.get("DESTINATION_CHANNEL_1", "-1002349374753") #HollyWoodMovies
+DESTINATION_CHANNEL_1 = os.environ.get("DESTINATION_CHANNEL_1", "-1002661425980") #Bypass Hollywood Forward
 DESTINATION_CHANNEL_2 = os.environ.get("DESTINATION_CHANNEL_2", "-1002488212445") #IndianMoviesForward
 DESTINATION_CHANNEL_3 = os.environ.get("DESTINATION_CHANNEL_3", "-1002488212445") #IndianMoviesForward
 DESTINATION_CHANNEL_4 = os.environ.get("DESTINATION_CHANNEL_4", "-1002377412867") #TheVideoForward
 DESTINATION_CHANNEL_5 = os.environ.get("DESTINATION_CHANNEL_5", "-1002402818813") #ExtraChannel
-DESTINATION_CHANNEL_6 = os.environ.get("DESTINATION_CHANNEL_6", "-1002488212445") #IndianMoviesForward
+DESTINATION_CHANNEL_6 = os.environ.get("DESTINATION_CHANNEL_6", "-1002548718458") #Bypass Indian Forward
 DESTINATION_CHANNEL_7 = os.environ.get("DESTINATION_CHANNEL_7", "-1002377412867") #TheVideoForward
 DESTINATION_CHANNEL_8 = os.environ.get("DESTINATION_CHANNEL_8", "-1002377412867") #TheVideoForward
 DESTINATION_CHANNEL_9 = os.environ.get("DESTINATION_CHANNEL_9", "-1002348514977") #TestDemo3
@@ -96,15 +96,8 @@ SOURCE_DESTINATION_MAP = channel_ids.get_source_destination_map()
 # Event handler for incoming messages
 async def sender_bH(event):
     try:
-        source_channel_id = event.chat_id
-        destination_channels = SOURCE_DESTINATION_MAP.get(source_channel_id, []) 
-        
-        if destination_channels:
-            await message_queue.put((event, destination_channels))
-            logging.info(f"Message ID {event.message.id} from {source_channel_id} added to queue for {destination_channels}")
-        else:
-            logging.info(f"No destination configured for source channel {source_channel_id}. Message ID {event.message.id} dropped.")
-            
+        await message_queue.put(event)
+        logging.info(f"Message ID {event.message.id} from chat {event.chat_id} added to queue.")
     except Exception as e:
         logging.error(f"Error in sender_bH adding message to queue: {e}")
 
@@ -112,35 +105,43 @@ async def sender_bH(event):
 async def message_processor():
     while True:
         try:
-            event, destination_channels = await message_queue.get()
-            logging.info(f"Processing message ID {event.message.id} from queue for destinations: {destination_channels}")
+            event = await message_queue.get()
+            source_channel_id = event.chat_id
+            destination_channels = SOURCE_DESTINATION_MAP.get(source_channel_id, [])
+
+            if not destination_channels:
+                logging.info(f"No destination configured for source channel {source_channel_id}. Message ID {event.message.id} dropped after retrieval from queue.")
+                message_queue.task_done()
+                continue
+
+            logging.info(f"Processing message ID {event.message.id} from {source_channel_id} for destinations: {destination_channels}")
             
             tasks = []
             for dest_channel in destination_channels:
                 try:
                     # Check for blocked text using lowercase version of the message
                     if event.raw_text and any(blocked_text in event.raw_text.lower() for blocked_text in BLOCKED_TEXTS):
-                        logging.warning(f"Blocked message ID {event.message.id} containing one of the specified texts: {event.raw_text}")
+                        logging.warning(f"Blocked message ID {event.message.id} from {source_channel_id} containing one of the specified texts: {event.raw_text}")
                         continue
 
                     # For media messages, check if forwarding is allowed
                     if event.media and MEDIA_FORWARD_RESPONSE != 'yes':
-                        logging.info(f"Media forwarding skipped by user for message ID {event.message.id}")
+                        logging.info(f"Media forwarding skipped by user for message ID {event.message.id} from {source_channel_id}")
                         continue
 
                     # Forward the message as is, dropping the author to remove the forward tag
                     task = asyncio.create_task(steallootdealUser.forward_messages(dest_channel, event.message, drop_author=True))
                     tasks.append(task)
-                    logging.info(f"Forwarding message ID {event.message.id} to channel {dest_channel} without forward tag")
+                    logging.info(f"Forwarding message ID {event.message.id} from {source_channel_id} to channel {dest_channel} without forward tag")
 
                 except Exception as e:
-                    logging.error(f"Error forwarding message ID {event.message.id} to channel {dest_channel}: {e}")
+                    logging.error(f"Error forwarding message ID {event.message.id} from {source_channel_id} to channel {dest_channel}: {e}")
             
             if tasks:
                 await asyncio.gather(*tasks)
             
             message_queue.task_done()
-            logging.info(f"Finished processing message ID {event.message.id} from queue.")
+            logging.info(f"Finished processing message ID {event.message.id} from {source_channel_id}.")
 
         except asyncio.CancelledError:
             logging.info("Message processor task cancelled.")
