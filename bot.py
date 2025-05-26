@@ -8,6 +8,7 @@ import asyncio
 
 # Configure logging
 logging.basicConfig(format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s', level=logging.INFO)
+logging.info("Logging configured.")
 
 # Initialize message queue
 message_queue = asyncio.Queue()
@@ -34,22 +35,22 @@ except Exception as ap:
     exit(1)
 
 # Define source and destination channels
-SOURCE_CHANNEL_1 = os.environ.get("SOURCE_CHANNEL_1", "-1001927159396") #Ävåïlåßlê
+SOURCE_CHANNEL_1 = os.environ.get("SOURCE_CHANNEL_1", "-1002436625087") #All Hollywood movies
 SOURCE_CHANNEL_2 = os.environ.get("SOURCE_CHANNEL_2", "-1001950252875") #Movie_mania
 SOURCE_CHANNEL_3 = os.environ.get("SOURCE_CHANNEL_3", "-1002045229088") #Movie_house
 SOURCE_CHANNEL_4 = os.environ.get("SOURCE_CHANNEL_4", "-1002603982843") #Japaneas_hub
 SOURCE_CHANNEL_5 = os.environ.get("SOURCE_CHANNEL_5", "-1001741122061") #DamselMovieDownload
-SOURCE_CHANNEL_6 = os.environ.get("SOURCE_CHANNEL_6", "-1001808135797") #S0uth Mov!e Shorts
+SOURCE_CHANNEL_6 = os.environ.get("SOURCE_CHANNEL_6", "-1002336841751") #All South Hindi dubbed movies
 SOURCE_CHANNEL_7 = os.environ.get("SOURCE_CHANNEL_7", "-1002607828329") #Instagram_links
 SOURCE_CHANNEL_8 = os.environ.get("SOURCE_CHANNEL_8", "-1002092938265") #Tera special Collectionn
 SOURCE_CHANNEL_9 = os.environ.get("SOURCE_CHANNEL_9", "-1002271035070") #testmmfilelog
 
-DESTINATION_CHANNEL_1 = os.environ.get("DESTINATION_CHANNEL_1", "-1002661425980") #Bypass Hollywood Forward
+DESTINATION_CHANNEL_1 = os.environ.get("DESTINATION_CHANNEL_1", "-1002349374753") #HollyWoodMovies
 DESTINATION_CHANNEL_2 = os.environ.get("DESTINATION_CHANNEL_2", "-1002488212445") #IndianMoviesForward
 DESTINATION_CHANNEL_3 = os.environ.get("DESTINATION_CHANNEL_3", "-1002488212445") #IndianMoviesForward
 DESTINATION_CHANNEL_4 = os.environ.get("DESTINATION_CHANNEL_4", "-1002377412867") #TheVideoForward
 DESTINATION_CHANNEL_5 = os.environ.get("DESTINATION_CHANNEL_5", "-1002402818813") #ExtraChannel
-DESTINATION_CHANNEL_6 = os.environ.get("DESTINATION_CHANNEL_6", "-1002548718458") #Bypass Indian Forward
+DESTINATION_CHANNEL_6 = os.environ.get("DESTINATION_CHANNEL_6", "-1002488212445") #IndianMoviesForward
 DESTINATION_CHANNEL_7 = os.environ.get("DESTINATION_CHANNEL_7", "-1002377412867") #TheVideoForward
 DESTINATION_CHANNEL_8 = os.environ.get("DESTINATION_CHANNEL_8", "-1002377412867") #TheVideoForward
 DESTINATION_CHANNEL_9 = os.environ.get("DESTINATION_CHANNEL_9", "-1002348514977") #TestDemo3
@@ -95,6 +96,7 @@ SOURCE_DESTINATION_MAP = channel_ids.get_source_destination_map()
 
 # Event handler for incoming messages
 async def sender_bH(event):
+    logging.info(f"sender_bH triggered for event from chat: {event.chat_id}, message ID: {event.message.id}")
     try:
         await message_queue.put(event)
         logging.info(f"Message ID {event.message.id} from chat {event.chat_id} added to queue.")
@@ -103,9 +105,12 @@ async def sender_bH(event):
 
 # Message processor
 async def message_processor():
+    logging.info("Message processor task started.")
     while True:
+        logging.info("Message processor loop iteration started, waiting for message from queue...")
         try:
             event = await message_queue.get()
+            logging.info(f"Message processor retrieved message ID {event.message.id} from chat {event.chat_id} from queue.")
             source_channel_id = event.chat_id
             destination_channels = SOURCE_DESTINATION_MAP.get(source_channel_id, [])
 
@@ -159,4 +164,5 @@ steallootdealUser.loop.create_task(message_processor())
 
 # Run the bot
 print("Bot has started.")
+logging.info("Starting Telethon client run_until_disconnected...")
 steallootdealUser     .run_until_disconnected()
