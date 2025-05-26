@@ -1,4 +1,3 @@
-
 import os
 from telethon import TelegramClient, events
 from decouple import config
@@ -96,18 +95,32 @@ SOURCE_DESTINATION_MAP = channel_ids.get_source_destination_map()
 
 # Event handler for incoming messages
 async def sender_bH(event):
-    logging.info(f"sender_bH triggered for event from chat: {event.chat_id}, message ID: {event.message.id}")
+    if not event or not event.message:
+        logging.warning("sender_bH triggered with invalid event object.")
+        return
+
+    chat_id = None
+    message_id = None
+    try:
+        chat_id = event.chat_id
+        message_id = event.message.id
+        logging.info(f"sender_bH triggered for event from chat: {chat_id}, message ID: {message_id}")
+    except AttributeError as ae:
+        logging.error(f"sender_bH: Error accessing event attributes (chat_id or message.id): {ae}. Event data: {event}")
+        return
+
     try:
         await message_queue.put(event)
-        logging.info(f"Message ID {event.message.id} from chat {event.chat_id} added to queue.")
+        logging.info(f"Message ID {message_id} from chat {chat_id} added to queue. Queue size: {message_queue.qsize()}")
     except Exception as e:
-        logging.error(f"Error in sender_bH adding message to queue: {e}")
+        logging.error(f"Error in sender_bH adding message ID {message_id} from chat {chat_id} to queue: {e}")
 
 # Message processor
 async def message_processor():
     logging.info("Message processor task started.")
     while True:
         logging.info("Message processor loop iteration started, waiting for message from queue...")
+        event = None  # Initialize event to None
         try:
             event = await message_queue.get()
             logging.info(f"Message processor retrieved message ID {event.message.id} from chat {event.chat_id} from queue.")
@@ -116,7 +129,7 @@ async def message_processor():
 
             if not destination_channels:
                 logging.info(f"No destination configured for source channel {source_channel_id}. Message ID {event.message.id} dropped after retrieval from queue.")
-                message_queue.task_done()
+                # message_queue.task_done() will be called in finally
                 continue
 
             logging.info(f"Processing message ID {event.message.id} from {source_channel_id} for destinations: {destination_channels}")
@@ -145,19 +158,31 @@ async def message_processor():
             if tasks:
                 await asyncio.gather(*tasks)
             
-            message_queue.task_done()
             logging.info(f"Finished processing message ID {event.message.id} from {source_channel_id}.")
 
         except asyncio.CancelledError:
             logging.info("Message processor task cancelled.")
+            if event:  # If event was retrieved before cancellation
+                try:
+                    message_queue.put_nowait(event)  # Re-queue the event
+                    logging.info(f"Re-queued message ID {event.message.id} due to cancellation.")
+                except asyncio.QueueFull:
+                    logging.error(f"Failed to re-queue message ID {event.message.id} due to cancellation, queue is full.")
             break
         except Exception as e:
-            logging.error(f"Error in message_processor: {e}")
-            await asyncio.sleep(1) # Add a small delay to prevent rapid error loops if persistent errors occur
+            if event:
+                logging.error(f"Error in message_processor for message ID {event.message.id}: {e}")
+            else:
+                logging.error(f"Error in message_processor (event not retrieved): {e}")
+            await asyncio.sleep(1)  # Add a small delay to prevent rapid error loops if persistent errors occur
+        finally:
+            if event:  # Ensure task_done is called only if an event was retrieved and processed (or skipped)
+                message_queue.task_done()
+                logging.debug(f"message_queue.task_done() called for event from chat {event.chat_id}")
 
 # Register event handler
 source_channels = channel_ids.source_channel_1 + channel_ids.source_channel_2 + channel_ids.source_channel_3 + channel_ids.source_channel_4 + channel_ids.source_channel_5 + channel_ids.source_channel_6 + channel_ids.source_channel_7 + channel_ids.source_channel_8 + channel_ids.source_channel_9
-steallootdealUser     .add_event_handler(sender_bH, events.NewMessage(incoming=True, chats=source_channels))
+steallootdealUser.add_event_handler(sender_bH, events.NewMessage(incoming=True, chats=source_channels))
 
 # Start the message processor
 steallootdealUser.loop.create_task(message_processor())
@@ -165,4 +190,4 @@ steallootdealUser.loop.create_task(message_processor())
 # Run the bot
 print("Bot has started.")
 logging.info("Starting Telethon client run_until_disconnected...")
-steallootdealUser     .run_until_disconnected()
+steallootdealUser.run_until_disconnected()
