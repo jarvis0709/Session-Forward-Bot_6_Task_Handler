@@ -34,8 +34,8 @@ except Exception as ap:
     exit(1)
 
 # Define source and destination channels
-SOURCE_CHANNEL_1 = os.environ.get("SOURCE_CHANNEL_1", "-1002436625087") #All Hollywood movies
-SOURCE_CHANNEL_2 = os.environ.get("SOURCE_CHANNEL_2", "-1001950252875") #Movie_mania
+SOURCE_CHANNEL_1 = os.environ.get("SOURCE_CHANNEL_1", "-1001927159396") #Ävåïlåßlê
+SOURCE_CHANNEL_2 = os.environ.get("SOURCE_CHANNEL_2", "-1001808135797") #S0uth Mov!e Shorts
 SOURCE_CHANNEL_3 = os.environ.get("SOURCE_CHANNEL_3", "-1002045229088") #Movie_house
 SOURCE_CHANNEL_4 = os.environ.get("SOURCE_CHANNEL_4", "-1002603982843") #Japaneas_hub
 SOURCE_CHANNEL_5 = os.environ.get("SOURCE_CHANNEL_5", "-1001741122061") #DamselMovieDownload
@@ -44,8 +44,8 @@ SOURCE_CHANNEL_7 = os.environ.get("SOURCE_CHANNEL_7", "-1002607828329") #Instagr
 SOURCE_CHANNEL_8 = os.environ.get("SOURCE_CHANNEL_8", "-1002092938265") #Tera special Collectionn
 SOURCE_CHANNEL_9 = os.environ.get("SOURCE_CHANNEL_9", "-1002271035070") #testmmfilelog
 
-DESTINATION_CHANNEL_1 = os.environ.get("DESTINATION_CHANNEL_1", "-1002349374753") #HollyWoodMovies
-DESTINATION_CHANNEL_2 = os.environ.get("DESTINATION_CHANNEL_2", "-1002488212445") #IndianMoviesForward
+DESTINATION_CHANNEL_1 = os.environ.get("DESTINATION_CHANNEL_1", "-1002661425980") #Bypass Hollywood Forward
+DESTINATION_CHANNEL_2 = os.environ.get("DESTINATION_CHANNEL_2", "-1002548718458") #Bypass Indian Forward
 DESTINATION_CHANNEL_3 = os.environ.get("DESTINATION_CHANNEL_3", "-1002488212445") #IndianMoviesForward
 DESTINATION_CHANNEL_4 = os.environ.get("DESTINATION_CHANNEL_4", "-1002377412867") #TheVideoForward
 DESTINATION_CHANNEL_5 = os.environ.get("DESTINATION_CHANNEL_5", "-1002402818813") #ExtraChannel
