@@ -294,15 +294,28 @@ async def process_link(event, link):
 # Link handler
 async def link_handler(event):
     try:
-        # Extract links from message text or caption
-        text = event.message.message if event.message.message else ""
-        if event.message.caption:
-            text += " " + event.message.caption
+        # Get text from any type of message
+        text = ""
+        try:
+            if hasattr(event.message, 'message'):
+                text += event.message.message if event.message.message else ""
+        except:
+            pass
             
-        # Find all links in text
-        links = re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', text)
+        try:
+            if hasattr(event.message, 'caption'):
+                text += " " + event.message.caption if event.message.caption else ""
+        except:
+            pass
+
+        if not text:
+            return
+            
+        # Find all terasharelink.com links in text
+        links = re.findall(r'https?://(?:www\.)?terasharelink\.com/[^\s]+', text.lower())
         
         if links:
+            logging.info(f"Found terasharelink.com links in message: {links}")
             for link in links:
                 await process_link(event, link)
                 
