@@ -28,9 +28,9 @@ YOUR_ADMIN_USER_ID = config("YOUR_ADMIN_USER_ID", default=0, cast=int)
 BOT_API_KEY = config("BOT_API_KEY", default="", cast=str)
 
 # New configurations for link processing
-LINK_SOURCE_CHANNEL = os.environ.get("LINK_SOURCE_CHANNEL", "") # Channel to monitor for links
-LINK_BOT_USERNAME = os.environ.get("LINK_BOT_USERNAME", "") # Bot to send links to
-LINK_DEST_CHANNEL = os.environ.get("LINK_DEST_CHANNEL", "") # Channel to forward media files to
+LINK_SOURCE_CHANNEL = os.environ.get("LINK_SOURCE_CHANNEL", "-1002823482126") # Channel to monitor for links
+LINK_BOT_USERNAME = os.environ.get("LINK_BOT_USERNAME", "Terabox_video_saver_bot") # Bot to send links to
+LINK_DEST_CHANNEL = os.environ.get("LINK_DEST_CHANNEL", "-1002224926400") # Channel to forward media files to
 LINK_WAIT_TIME = int(os.environ.get("LINK_WAIT_TIME", "180")) # Time to wait for bot response in seconds
 
 # Define mapping file path
