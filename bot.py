@@ -27,6 +27,12 @@ MEDIA_FORWARD_RESPONSE = config("MEDIA_FORWARD_RESPONSE", default="yes").lower()
 YOUR_ADMIN_USER_ID = config("YOUR_ADMIN_USER_ID", default=0, cast=int)
 BOT_API_KEY = config("BOT_API_KEY", default="", cast=str)
 
+# New configurations for link processing
+LINK_SOURCE_CHANNEL = os.environ.get("LINK_SOURCE_CHANNEL", "") # Channel to monitor for links
+LINK_BOT_USERNAME = os.environ.get("LINK_BOT_USERNAME", "") # Bot to send links to
+LINK_DEST_CHANNEL = os.environ.get("LINK_DEST_CHANNEL", "") # Channel to forward media files to
+LINK_WAIT_TIME = int(os.environ.get("LINK_WAIT_TIME", "180")) # Time to wait for bot response in seconds
+
 # Define mapping file path
 MAPPING_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mapping.json")
 
@@ -256,6 +262,53 @@ async def getmap_command_handler(event):
         logging.error(f"Error in getmap_command_handler: {e}")
         await event.respond(f"❌ Error: {str(e)}")
 
+# Link processing function
+async def process_link(event, link):
+    try:
+        # Send link to bot
+        async with steallootdealUser.conversation(LINK_BOT_USERNAME) as conv:
+            await conv.send_message(link)
+            try:
+                # Wait for bot response
+                response = await conv.get_response(timeout=LINK_WAIT_TIME)
+                
+                # Only forward if it's a media file
+                if response and response.media:
+                    # Forward media to destination channel
+                    await steallootdealUser.send_message(LINK_DEST_CHANNEL, file=response.media)
+                    logging.info(f"Forwarded media from {LINK_BOT_USERNAME} to {LINK_DEST_CHANNEL}")
+                
+                # If there are more messages (like text messages), ignore them
+                try:
+                    while True:
+                        await conv.get_response(timeout=5)
+                except asyncio.TimeoutError:
+                    pass
+                
+            except asyncio.TimeoutError:
+                logging.warning(f"Timeout waiting for bot response to link: {link}")
+            
+    except Exception as e:
+        logging.error(f"Error processing link: {e}")
+
+# Link handler
+async def link_handler(event):
+    try:
+        # Extract links from message text or caption
+        text = event.message.message if event.message.message else ""
+        if event.message.caption:
+            text += " " + event.message.caption
+            
+        # Find all links in text
+        links = re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', text)
+        
+        if links:
+            for link in links:
+                await process_link(event, link)
+                
+    except Exception as e:
+        logging.error(f"Error in link handler: {e}")
+
 # Message processor
 async def message_processor():
     logging.info("Message processor task started.")
@@ -328,6 +381,13 @@ steallootdealUser.add_event_handler(start_command_handler, events.NewMessage(pat
 steallootdealUser.add_event_handler(setmap_command_handler, events.NewMessage(pattern='/setmap', incoming=True))
 steallootdealUser.add_event_handler(removemap_command_handler, events.NewMessage(pattern='/removemap', incoming=True))
 steallootdealUser.add_event_handler(getmap_command_handler, events.NewMessage(pattern='/getmap', incoming=True))
+
+# Register handlers for link processing
+if LINK_SOURCE_CHANNEL and LINK_BOT_USERNAME and LINK_DEST_CHANNEL:
+    steallootdealUser.add_event_handler(
+        link_handler, 
+        events.NewMessage(chats=int(LINK_SOURCE_CHANNEL))
+    )
 
 # Start the message processor
 steallootdealUser.loop.create_task(message_processor())
