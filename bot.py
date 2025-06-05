@@ -312,7 +312,7 @@ async def link_handler(event):
             return
             
         # Find all terasharelink.com links in text
-        links = re.findall(r'https?://(?:www\.)?terasharelink\.com/[^\s]+', text.lower())
+        links = re.findall(r'https?://(?:www\.)?terasharelink\.com/[^\s]+', text)
         
         if links:
             logging.info(f"Found terasharelink.com links in message: {links}")
