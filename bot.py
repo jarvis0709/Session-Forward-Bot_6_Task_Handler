@@ -266,30 +266,41 @@ async def getmap_command_handler(event):
 async def process_link(event, link):
     try:
         # Send link to bot
-        async with steallootdealUser.conversation(LINK_BOT_USERNAME) as conv:
-            await conv.send_message(link)
-            try:
-                # Wait for bot response
-                response = await conv.get_response(timeout=LINK_WAIT_TIME)
-                
-                # Only forward if it's a media file
-                if response and response.media:
-                    # Forward media to destination channel
-                    await steallootdealUser.send_message(LINK_DEST_CHANNEL, file=response.media)
-                    logging.info(f"Forwarded media from {LINK_BOT_USERNAME} to {LINK_DEST_CHANNEL}")
-                
-                # If there are more messages (like text messages), ignore them
-                try:
-                    while True:
-                        await conv.get_response(timeout=5)
-                except asyncio.TimeoutError:
-                    pass
-                
-            except asyncio.TimeoutError:
-                logging.warning(f"Timeout waiting for bot response to link: {link}")
-            
+        await steallootdealUser.send_message(LINK_BOT_USERNAME, link)
+        logging.info(f"Sent link to bot: {link}")
     except Exception as e:
-        logging.error(f"Error processing link: {e}")
+        logging.error(f"Error sending link to bot: {e}")
+
+# Bot response handler
+async def bot_response_handler(event):
+    try:
+        # Get the sender
+        sender = await event.get_sender()
+        if not sender:
+            return
+            
+        # Check if message is from our target bot (both by username and id)
+        bot_username = LINK_BOT_USERNAME.replace("@", "")
+        if (hasattr(sender, 'username') and sender.username == bot_username) or \
+           (hasattr(sender, 'id') and str(sender.id) == bot_username):
+            try:
+                # Forward everything from bot as is to destination channel
+                await steallootdealUser.send_message(
+                    LINK_DEST_CHANNEL,
+                    message=event.message.message if event.message.message else None,
+                    file=event.message.media if event.message.media else None,
+                    reply_to=event.message.reply_to_msg_id if event.message.reply_to_msg_id else None
+                )
+                logging.info(f"Forwarded new message from bot to {LINK_DEST_CHANNEL}")
+            except Exception as e:
+                try:
+                    # If direct send fails, try forwarding
+                    await steallootdealUser.forward_messages(LINK_DEST_CHANNEL, event.message)
+                    logging.info(f"Forwarded message from bot to {LINK_DEST_CHANNEL} using forward method")
+                except Exception as e2:
+                    logging.error(f"All attempts to forward bot message failed: {e2}")
+    except Exception as e:
+        logging.error(f"Error in bot response handler: {e}")
 
 # Link handler
 async def link_handler(event):
@@ -393,13 +404,18 @@ steallootdealUser.add_event_handler(sender_bH, events.NewMessage(incoming=True, 
 steallootdealUser.add_event_handler(start_command_handler, events.NewMessage(pattern='/start', incoming=True))
 steallootdealUser.add_event_handler(setmap_command_handler, events.NewMessage(pattern='/setmap', incoming=True))
 steallootdealUser.add_event_handler(removemap_command_handler, events.NewMessage(pattern='/removemap', incoming=True))
-steallootdealUser.add_event_handler(getmap_command_handler, events.NewMessage(pattern='/getmap', incoming=True))
-
-# Register handlers for link processing
+steallootdealUser.add_event_handler(getmap_command_handler, events.NewMessage(pattern='/getmap', incoming=True))    # Register handlers for link processing and bot responses
 if LINK_SOURCE_CHANNEL and LINK_BOT_USERNAME and LINK_DEST_CHANNEL:
+    # Handler for source channel messages
     steallootdealUser.add_event_handler(
         link_handler, 
         events.NewMessage(chats=int(LINK_SOURCE_CHANNEL))
+    )
+    
+    # Handler for bot responses - catch all messages from the bot
+    steallootdealUser.add_event_handler(
+        bot_response_handler,
+        events.NewMessage()
     )
 
 # Start the message processor
