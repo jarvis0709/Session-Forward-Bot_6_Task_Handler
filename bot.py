@@ -33,6 +33,9 @@ LINK_BOT_USERNAME = os.environ.get("LINK_BOT_USERNAME", "Terabox_video_saver_bot
 LINK_DEST_CHANNEL = os.environ.get("LINK_DEST_CHANNEL", "-1002224926400") # Channel to forward media files to
 LINK_WAIT_TIME = int(os.environ.get("LINK_WAIT_TIME", "180")) # Time to wait for bot response in seconds
 
+# Initialize message queue for bot responses to handle flood limits
+bot_response_queue = asyncio.Queue()
+
 # Define mapping file path
 MAPPING_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mapping.json")
 
@@ -283,24 +286,64 @@ async def bot_response_handler(event):
         bot_username = LINK_BOT_USERNAME.replace("@", "")
         if (hasattr(sender, 'username') and sender.username == bot_username) or \
            (hasattr(sender, 'id') and str(sender.id) == bot_username):
-            try:
-                # Forward everything from bot as is to destination channel
-                await steallootdealUser.send_message(
-                    LINK_DEST_CHANNEL,
-                    message=event.message.message if event.message.message else None,
-                    file=event.message.media if event.message.media else None,
-                    reply_to=event.message.reply_to_msg_id if event.message.reply_to_msg_id else None
-                )
-                logging.info(f"Forwarded new message from bot to {LINK_DEST_CHANNEL}")
-            except Exception as e:
-                try:
-                    # If direct send fails, try forwarding
-                    await steallootdealUser.forward_messages(LINK_DEST_CHANNEL, event.message)
-                    logging.info(f"Forwarded message from bot to {LINK_DEST_CHANNEL} using forward method")
-                except Exception as e2:
-                    logging.error(f"All attempts to forward bot message failed: {e2}")
+            # Instead of sending directly, queue the message for processing
+            await bot_response_queue.put(event)
+            logging.info(f"Queued bot message for processing")
     except Exception as e:
         logging.error(f"Error in bot response handler: {e}")
+
+# Bot response processor to handle flood limits
+async def bot_response_processor():
+    logging.info("Bot response processor started")
+    while True:
+        try:
+            event = await bot_response_queue.get()
+            
+            try:
+                # Get destination channel entity first
+                try:
+                    dest_channel = await steallootdealUser.get_entity(int(LINK_DEST_CHANNEL))
+                except ValueError as ve:
+                    logging.error(f"Invalid channel ID {LINK_DEST_CHANNEL}: {ve}")
+                    continue
+                except Exception as e:
+                    logging.error(f"Could not get channel entity for {LINK_DEST_CHANNEL}: {e}")
+                    # Wait and retry once
+                    await asyncio.sleep(5)
+                    dest_channel = await steallootdealUser.get_entity(int(LINK_DEST_CHANNEL))
+                
+                # Try to forward the message
+                try:
+                    await steallootdealUser.send_message(
+                        dest_channel,
+                        message=event.message.message if event.message.message else None,
+                        file=event.message.media if event.message.media else None,
+                        reply_to=event.message.reply_to_msg_id if event.message.reply_to_msg_id else None
+                    )
+                    logging.info(f"Forwarded new message from bot to {LINK_DEST_CHANNEL}")
+                except Exception as send_error:
+                    # If send fails, try forwarding
+                    await steallootdealUser.forward_messages(dest_channel, event.message)
+                    logging.info(f"Forwarded message using forward method")
+                
+                # Add delay between messages to avoid flood wait
+                await asyncio.sleep(2)
+                
+            except Exception as e:
+                logging.error(f"Error processing bot message: {e}")
+                # If we hit flood wait, wait and retry
+                if "flood wait" in str(e).lower():
+                    wait_time = int(str(e).split("flood wait of ")[1].split(" seconds")[0])
+                    logging.info(f"Hit flood wait, sleeping for {wait_time} seconds")
+                    await asyncio.sleep(wait_time)
+                    # Re-queue the message
+                    await bot_response_queue.put(event)
+                
+        except Exception as e:
+            logging.error(f"Error in bot response processor: {e}")
+            await asyncio.sleep(1)
+        finally:
+            bot_response_queue.task_done()
 
 # Link handler
 async def link_handler(event):
@@ -399,29 +442,82 @@ async def message_processor():
                 logging.debug(f"message_queue.task_done() called for event from chat {event.chat_id}")
 
 # Register event handlers
-source_channels = list(SOURCE_DESTINATION_MAP.keys())
-steallootdealUser.add_event_handler(sender_bH, events.NewMessage(incoming=True, chats=source_channels))
-steallootdealUser.add_event_handler(start_command_handler, events.NewMessage(pattern='/start', incoming=True))
-steallootdealUser.add_event_handler(setmap_command_handler, events.NewMessage(pattern='/setmap', incoming=True))
-steallootdealUser.add_event_handler(removemap_command_handler, events.NewMessage(pattern='/removemap', incoming=True))
-steallootdealUser.add_event_handler(getmap_command_handler, events.NewMessage(pattern='/getmap', incoming=True))    # Register handlers for link processing and bot responses
-if LINK_SOURCE_CHANNEL and LINK_BOT_USERNAME and LINK_DEST_CHANNEL:
-    # Handler for source channel messages
-    steallootdealUser.add_event_handler(
-        link_handler, 
-        events.NewMessage(chats=int(LINK_SOURCE_CHANNEL))
-    )
-    
-    # Handler for bot responses - catch all messages from the bot
-    steallootdealUser.add_event_handler(
-        bot_response_handler,
-        events.NewMessage()
-    )
+async def register_handlers():
+    try:
+        # Basic handlers
+        source_channels = list(SOURCE_DESTINATION_MAP.keys())
+        steallootdealUser.add_event_handler(
+            sender_bH, 
+            events.NewMessage(incoming=True, chats=source_channels)
+        )
+        
+        # Command handlers
+        steallootdealUser.add_event_handler(
+            start_command_handler, 
+            events.NewMessage(pattern=r'^/start$', incoming=True)
+        )
+        steallootdealUser.add_event_handler(
+            setmap_command_handler, 
+            events.NewMessage(pattern=r'^/setmap', incoming=True)
+        )
+        steallootdealUser.add_event_handler(
+            removemap_command_handler, 
+            events.NewMessage(pattern=r'^/removemap', incoming=True)
+        )
+        steallootdealUser.add_event_handler(
+            getmap_command_handler, 
+            events.NewMessage(pattern=r'^/getmap$', incoming=True)
+        )
+        
+        # Link processing handlers
+        if LINK_SOURCE_CHANNEL and LINK_BOT_USERNAME and LINK_DEST_CHANNEL:
+            logging.info(f"Setting up link processing for source channel {LINK_SOURCE_CHANNEL}")
+            # Handler for source channel messages
+            steallootdealUser.add_event_handler(
+                link_handler, 
+                events.NewMessage(chats=int(LINK_SOURCE_CHANNEL))
+            )
+            
+            # Get bot entity to ensure it exists
+            bot_entity = await steallootdealUser.get_entity(LINK_BOT_USERNAME)
+            if bot_entity:
+                logging.info(f"Found bot {LINK_BOT_USERNAME} with id {bot_entity.id}")
+                # Handler for bot responses - filter by bot ID
+                steallootdealUser.add_event_handler(
+                    bot_response_handler,
+                    events.NewMessage(from_users=bot_entity.id)
+                )
+            else:
+                logging.error(f"Could not find bot {LINK_BOT_USERNAME}")
+        
+        logging.info("All handlers registered successfully")
+    except Exception as e:
+        logging.error(f"Error registering handlers: {e}")
+        raise
 
-# Start the message processor
-steallootdealUser.loop.create_task(message_processor())
+# Start all tasks
+async def start_bot():
+    try:
+        # Register all event handlers
+        await register_handlers()
+        
+        # Start processors
+        steallootdealUser.loop.create_task(message_processor())
+        steallootdealUser.loop.create_task(bot_response_processor())
+        
+        # Log startup
+        print("Bot has started.")
+        logging.info("Starting Telethon client...")
+        
+        # Run the bot
+        await steallootdealUser.run_until_disconnected()
+    except Exception as e:
+        logging.error(f"Error starting bot: {e}")
+        raise
 
 # Run the bot
+if __name__ == "__main__":
+    steallootdealUser.loop.run_until_complete(start_bot())
 print("Bot has started.")
 logging.info("Starting Telethon client run_until_disconnected...")
 steallootdealUser.run_until_disconnected()
