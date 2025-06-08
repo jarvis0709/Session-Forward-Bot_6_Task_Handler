@@ -77,9 +77,16 @@ async def extract_terabox_links(text: str) -> List[str]:
 
 async def process_thumbnail(message: Message) -> Optional[bytes]:
     """Extract thumbnail from message if available."""
-    if message.media:
-        if isinstance(message.media, (MessageMediaPhoto, MessageMediaDocument)):
-            return await message.download_media(bytes)
+    try:
+        if message.media:
+            if isinstance(message.media, (MessageMediaPhoto, MessageMediaDocument)):
+                logger.info("Downloading media for thumbnail")
+                # Download as bytes
+                media_data = await message.download_media(bytes)
+                logger.info("Successfully downloaded media data")
+                return media_data
+    except Exception as e:
+        logger.error(f"Error in process_thumbnail: {e}")
     return None
 
 async def process_message(event: Message):
@@ -104,7 +111,7 @@ async def process_message(event: Message):
                 logger.info("Message contains media, attempting to extract thumbnail")
                 thumbnail = await process_thumbnail(event.message)
                 if thumbnail:
-                    logger.info("Successfully extracted thumbnail")
+                    logger.info(f"Successfully extracted thumbnail of size: {len(thumbnail)} bytes")
         except Exception as e:
             logger.error(f"Error extracting thumbnail: {e}")
             thumbnail = None
@@ -120,8 +127,7 @@ async def process_message(event: Message):
                 logger.info("Sending message to downloader bot")
                 sent_msg = await client.send_message(
                     DOWNLOADER_BOT_USERNAME,
-                    text,
-                    file=event.media if event.media else None
+                    text
                 )
                 
                 if sent_msg:
@@ -230,7 +236,8 @@ async def handle_file_store_response(event: Message):
     """Handle responses from the file store bot."""
     try:
         logger.info("Received message from file store bot")
-        logger.info(f"Message content: {event.message.text or event.message.caption}")
+        message_text = event.message.text or event.message.caption
+        logger.info(f"Message content: {message_text}")
         
         if not event.reply_to:
             logger.debug("Not a reply message, skipping")
@@ -244,32 +251,48 @@ async def handle_file_store_response(event: Message):
             return
             
         response_data = FILE_STORE_RESPONSES[original_msg_id]
-        file_store_message = event.message.text or event.message.caption
         
-        if not file_store_message:
+        if not message_text:
             logger.debug("No message content, skipping")
             return
             
-        if "ʜᴇʀᴇ ɪs ʏᴏᴜʀ ʟɪɴᴋ" in file_store_message:
+        if "ʜᴇʀᴇ ɪs ʏᴏᴜʀ ʟɪɴᴋ" in message_text:
             logger.info("Found file store link message")
             
             try:
                 # Get the original thumbnail
                 original_link = response_data.get('original_link')
-                thumbnail = LINK_THUMBNAIL_MAP.get(original_link) if original_link else None
+                thumbnail = LINK_THUMBNAIL_MAP.get(original_link)
                 
-                logger.info("Forwarding to destination channel")
-                # Forward to destination
-                await client.send_message(
-                    DESTINATION_CHANNEL_ID,
-                    file_store_message,
-                    file=thumbnail if thumbnail else None
-                )
-                logger.info("Successfully forwarded to destination channel")
+                if thumbnail:
+                    logger.info(f"Found thumbnail of size: {len(thumbnail)} bytes")
+                else:
+                    logger.info("No thumbnail found for this link")
+
+                logger.info(f"Forwarding to destination channel: {DESTINATION_CHANNEL_ID}")
+                
+                try:
+                    # First try sending with thumbnail
+                    await client.send_file(
+                        DESTINATION_CHANNEL_ID,
+                        thumbnail,
+                        caption=message_text,
+                        force_document=False
+                    )
+                    logger.info("Successfully sent message with thumbnail to destination")
+                except Exception as thumb_error:
+                    logger.error(f"Error sending with thumbnail: {thumb_error}")
+                    # If thumbnail fails, try sending just the message
+                    await client.send_message(
+                        DESTINATION_CHANNEL_ID,
+                        message_text
+                    )
+                    logger.info("Sent message without thumbnail to destination")
                 
                 # Cleanup
-                if original_link and original_link in LINK_THUMBNAIL_MAP:
+                if original_link in LINK_THUMBNAIL_MAP:
                     del LINK_THUMBNAIL_MAP[original_link]
+                    logger.info("Cleaned up thumbnail data")
                     
             except Exception as e:
                 logger.error(f"Error forwarding to destination: {e}")
