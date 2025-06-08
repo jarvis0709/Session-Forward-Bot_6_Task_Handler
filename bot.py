@@ -250,9 +250,25 @@ client.add_event_handler(
     events.NewMessage(from_users=FILE_STORE_BOT_USERNAME)
 )
 
-# Start the queue processor
-asyncio.create_task(process_queue())
+async def main():
+    """Main function to run the bot."""
+    try:
+        print("Bot has started.")
+        
+        # Start the queue processor
+        queue_processor = asyncio.create_task(process_queue())
+        
+        # Start the client
+        await client.start()
+        
+        # Run until disconnected
+        await client.run_until_disconnected()
+        
+    except Exception as e:
+        logger.error(f"Error in main: {e}")
+    finally:
+        await client.disconnect()
 
-# Run the bot
-print("Bot has started.")
-client.run_until_disconnected()
+if __name__ == "__main__":
+    # Run the main function
+    asyncio.run(main())
