@@ -6,7 +6,7 @@ from telethon import TelegramClient, events
 from decouple import config
 import logging
 from telethon.sessions import StringSession
-from telethon.tl.types import Message, MessageMediaPhoto, MessageMediaDocument, MessageMediaVideo
+from telethon.tl.types import Message, MessageMediaPhoto, MessageMediaDocument
 from typing import Dict, Optional, List, Tuple
 from collections import defaultdict
 
@@ -28,7 +28,7 @@ DESTINATION_CHANNEL_ID = config("DESTINATION_CHANNEL_ID", cast=int)
 
 # Constants
 CONFIG_FILE = "config.json"
-TERABOX_REGEX = r"https?://(?:www\.)?(terabox\.com|1024terabox\.com|teraboxlink\.com|terafileshare\.com|teraboxshare\.com|teraboxapp\.com)/.*?"
+TERABOX_REGEX = r"(?:https?://(?:www\.)?(?:1024terabox\.com|terabox\.com|teraboxlink\.com|terafileshare\.com|teraboxshare\.com|teraboxapp\.com)/\S+)"
 PROCESSING_QUEUE = asyncio.Queue()
 LINK_THUMBNAIL_MAP: Dict[str, bytes] = {}
 PENDING_DOWNLOADS: Dict[str, asyncio.Event] = {}
@@ -78,7 +78,7 @@ async def extract_terabox_links(text: str) -> List[str]:
 async def process_thumbnail(message: Message) -> Optional[bytes]:
     """Extract thumbnail from message if available."""
     if message.media:
-        if isinstance(message.media, (MessageMediaPhoto, MessageMediaDocument, MessageMediaVideo)):
+        if isinstance(message.media, (MessageMediaPhoto, MessageMediaDocument)):
             return await message.download_media(bytes)
     return None
 
@@ -148,23 +148,27 @@ async def process_queue():
 async def handle_downloader_response(event: Message):
     """Handle responses from the downloader bot."""
     try:
-        # Only process messages with video or document files
-        if event.media and (isinstance(event.media, (MessageMediaDocument, MessageMediaVideo))):
-            # Forward to file store bot
-            forwarded = await event.forward_to(FILE_STORE_BOT_USERNAME)
-            
-            # Wait for file store bot response
-            response_event = asyncio.Event()
-            FILE_STORE_RESPONSES[forwarded.id] = {
-                'event': response_event,
-                'original_link': None  # Will be set when processing file store response
-            }
-            
-            try:
-                await asyncio.wait_for(response_event.wait(), timeout=60)
-            except asyncio.TimeoutError:
-                logger.error("Timeout waiting for file store bot response")
+        # Check if the message has media and is a document
+        if event.media and isinstance(event.media, MessageMediaDocument):
+            mime_type = event.media.document.mime_type
+            # Check if it's a video or document
+            if mime_type.startswith('video/') or not mime_type.startswith('image/'):
+                # Forward to file store bot
+                forwarded = await event.forward_to(FILE_STORE_BOT_USERNAME)
                 
+                # Wait for file store bot response
+                response_event = asyncio.Event()
+                FILE_STORE_RESPONSES[forwarded.id] = {
+                    'event': response_event,
+                    'original_link': None  # Will be set when processing file store response
+                }
+                
+                try:
+                    await asyncio.wait_for(response_event.wait(), timeout=60)
+                except asyncio.TimeoutError:
+                    logger.error("Timeout waiting for file store bot response")
+            else:
+                logger.debug("Ignored non-video/document media from downloader bot")
         else:
             logger.debug("Ignored non-media message from downloader bot")
                 
