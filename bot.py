@@ -27,6 +27,9 @@ DOWNLOADER_BOT_USERNAME = config("DOWNLOADER_BOT_USERNAME")
 FILE_STORE_BOT_USERNAME = config("FILE_STORE_BOT_USERNAME")
 DESTINATION_CHANNEL_ID = config("DESTINATION_CHANNEL_ID", cast=int)
 
+# Initialize the client
+client = TelegramClient(StringSession(SESSION), APP_ID, API_HASH)
+
 # Create temp directory for thumbnails
 TEMP_DIR = tempfile.mkdtemp()
 logger.info(f"Created temporary directory for thumbnails at: {TEMP_DIR}")
