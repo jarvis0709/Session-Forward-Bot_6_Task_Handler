@@ -69,8 +69,11 @@ except Exception as ap:
     exit(1)
 
 async def extract_terabox_links(text: str) -> List[str]:
-    """Extract Terabox links from text."""
-    return re.findall(TERABOX_REGEX, text)
+    """Extract Terabox links from text without modifying them."""
+    # Use non-capturing groups (?:) to match but not modify the links
+    pattern = r'(?:https?://(?:www\.)?(?:1024terabox\.com|terabox\.com|teraboxlink\.com|terafileshare\.com|teraboxshare\.com|teraboxapp\.com)/\S+)'
+    matches = re.finditer(pattern, text)
+    return [match.group(0) for match in matches]  # Return exact matches without modification
 
 async def process_thumbnail(message: Message) -> Optional[bytes]:
     """Extract thumbnail from message if available."""
@@ -94,8 +97,8 @@ async def process_message(event: Message):
             if thumbnail:
                 LINK_THUMBNAIL_MAP[link] = thumbnail
             
-            # Add to processing queue
-            await PROCESSING_QUEUE.put((link, event.id))
+            # Add to processing queue with original text
+            await PROCESSING_QUEUE.put((link, event.id, text))
             logger.info(f"Added Terabox link to queue: {link}")
 
     except Exception as e:
@@ -105,14 +108,15 @@ async def process_queue():
     """Process queued Terabox links."""
     while True:
         try:
-            link, msg_id = await PROCESSING_QUEUE.get()
+            link, msg_id, original_text = await PROCESSING_QUEUE.get()
             
-            # Send link to downloader bot
+            # Send link to downloader bot with original text
             download_event = asyncio.Event()
             PENDING_DOWNLOADS[link] = download_event
             
-            await client.send_message(DOWNLOADER_BOT_USERNAME, link)
-            logger.info(f"Sent link to downloader bot: {link}")
+            # Send the original text containing the link
+            await client.send_message(DOWNLOADER_BOT_USERNAME, original_text)
+            logger.info(f"Sent original message to downloader bot containing link: {link}")
             
             # Wait for download (with timeout)
             try:
