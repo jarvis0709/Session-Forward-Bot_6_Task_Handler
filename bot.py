@@ -6,7 +6,7 @@ from telethon import TelegramClient, events
 from decouple import config
 import logging
 from telethon.sessions import StringSession
-from telethon.tl.types import Message, MessageMediaPhoto, MessageMediaDocument
+from telethon.tl.types import Message, MessageMediaPhoto, MessageMediaDocument, MessageMediaVideo
 from typing import Dict, Optional, List, Tuple
 from collections import defaultdict
 
@@ -32,7 +32,7 @@ TERABOX_REGEX = r"https?://(?:www\.)?(terabox\.com|1024terabox\.com|teraboxlink\
 PROCESSING_QUEUE = asyncio.Queue()
 LINK_THUMBNAIL_MAP: Dict[str, bytes] = {}
 PENDING_DOWNLOADS: Dict[str, asyncio.Event] = {}
-FILE_STORE_RESPONSES: Dict[int, asyncio.Event] = {}
+FILE_STORE_RESPONSES: Dict[int, dict] = {}
 
 class Config:
     def __init__(self):
@@ -78,7 +78,7 @@ async def extract_terabox_links(text: str) -> List[str]:
 async def process_thumbnail(message: Message) -> Optional[bytes]:
     """Extract thumbnail from message if available."""
     if message.media:
-        if isinstance(message.media, (MessageMediaPhoto, MessageMediaDocument)):
+        if isinstance(message.media, (MessageMediaPhoto, MessageMediaDocument, MessageMediaVideo)):
             return await message.download_media(bytes)
     return None
 
@@ -91,14 +91,20 @@ async def process_message(event: Message):
         if not terabox_links:
             return
 
+        # Get thumbnail from the message
         thumbnail = await process_thumbnail(event.message)
         
         for link in terabox_links:
             if thumbnail:
                 LINK_THUMBNAIL_MAP[link] = thumbnail
             
-            # Add to processing queue with original text
-            await PROCESSING_QUEUE.put((link, event.id, text))
+            # Add to processing queue with original text and link
+            await PROCESSING_QUEUE.put({
+                'link': link,
+                'msg_id': event.id,
+                'text': text,
+                'thumbnail': thumbnail
+            })
             logger.info(f"Added Terabox link to queue: {link}")
 
     except Exception as e:
@@ -108,14 +114,21 @@ async def process_queue():
     """Process queued Terabox links."""
     while True:
         try:
-            link, msg_id, original_text = await PROCESSING_QUEUE.get()
+            data = await PROCESSING_QUEUE.get()
+            link = data['link']
+            original_text = data['text']
             
             # Send link to downloader bot with original text
             download_event = asyncio.Event()
             PENDING_DOWNLOADS[link] = download_event
             
             # Send the original text containing the link
-            await client.send_message(DOWNLOADER_BOT_USERNAME, original_text)
+            sent_msg = await client.send_message(DOWNLOADER_BOT_USERNAME, original_text)
+            
+            # Store the original link for later use with file store response
+            if sent_msg.id in FILE_STORE_RESPONSES:
+                FILE_STORE_RESPONSES[sent_msg.id]['original_link'] = link
+            
             logger.info(f"Sent original message to downloader bot containing link: {link}")
             
             # Wait for download (with timeout)
@@ -135,18 +148,25 @@ async def process_queue():
 async def handle_downloader_response(event: Message):
     """Handle responses from the downloader bot."""
     try:
-        if event.file:
+        # Only process messages with video or document files
+        if event.media and (isinstance(event.media, (MessageMediaDocument, MessageMediaVideo))):
             # Forward to file store bot
             forwarded = await event.forward_to(FILE_STORE_BOT_USERNAME)
             
             # Wait for file store bot response
             response_event = asyncio.Event()
-            FILE_STORE_RESPONSES[forwarded.id] = response_event
+            FILE_STORE_RESPONSES[forwarded.id] = {
+                'event': response_event,
+                'original_link': None  # Will be set when processing file store response
+            }
             
             try:
                 await asyncio.wait_for(response_event.wait(), timeout=60)
             except asyncio.TimeoutError:
                 logger.error("Timeout waiting for file store bot response")
+                
+        else:
+            logger.debug("Ignored non-media message from downloader bot")
                 
     except Exception as e:
         logger.error(f"Error handling downloader response: {e}")
@@ -156,19 +176,31 @@ async def handle_file_store_response(event: Message):
     try:
         if event.message.reply_to:
             original_msg_id = event.message.reply_to.reply_to_msg_id
-            file_link = event.message.text or event.message.caption
             
-            if file_link:
-                # Send to destination channel
-                if original_msg_id in FILE_STORE_RESPONSES:
-                    event = FILE_STORE_RESPONSES.pop(original_msg_id)
-                    event.set()
+            # Check if this is a response we're waiting for
+            if original_msg_id in FILE_STORE_RESPONSES:
+                response_data = FILE_STORE_RESPONSES.pop(original_msg_id)
+                response_event = response_data['event']
+                
+                # Get the complete message text (including the formatted link)
+                file_store_message = event.message.text or event.message.caption
+                
+                if file_store_message and "ʜᴇʀᴇ ɪs ʏᴏᴜʀ ʟɪɴᴋ" in file_store_message:
+                    # Get the original thumbnail for this link
+                    original_link = response_data.get('original_link')
+                    thumbnail = LINK_THUMBNAIL_MAP.get(original_link) if original_link else None
                     
+                    # Forward the complete message with thumbnail to destination
                     await client.send_message(
                         DESTINATION_CHANNEL_ID,
-                        file_link,
-                        file=LINK_THUMBNAIL_MAP.get(original_msg_id)
+                        file_store_message,  # Complete formatted message from file store bot
+                        file=thumbnail  # Original thumbnail from source message
                     )
+                    
+                    logger.info("Successfully forwarded file store link with thumbnail")
+                    
+                # Signal that we've processed this response
+                response_event.set()
                     
     except Exception as e:
         logger.error(f"Error handling file store response: {e}")
