@@ -106,27 +106,35 @@ async def process_message(event: Message):
 
         logger.info(f"Found {len(terabox_links)} Terabox links in message")
         
-        # Get thumbnail from the message first
-        thumbnail = await process_thumbnail(event.message)
-        if thumbnail:
-            logger.info("Successfully extracted thumbnail from source message")
-        else:
-            logger.info("No thumbnail found in source message")
+        # First get the thumbnail from source message
+        thumbnail = None
+        if event.message.media:
+            try:
+                thumbnail = await event.message.download_media(bytes)
+                logger.info("Successfully saved thumbnail from source message")
+            except Exception as e:
+                logger.error(f"Error saving thumbnail: {str(e)}")
         
         for link in terabox_links:
-            # Store the thumbnail with the link
             if thumbnail:
                 LINK_THUMBNAIL_MAP[link] = thumbnail
-                logger.info(f"Stored thumbnail for link: {link}")
+                logger.info(f"Mapped thumbnail to Terabox link: {link}")
             
-            # Add to processing queue with original text and link
-            await PROCESSING_QUEUE.put({
-                'link': link,
-                'msg_id': event.id,
-                'text': text,
-                'thumbnail': thumbnail
-            })
-            logger.info(f"Added Terabox link to queue: {link}")
+            # Send to downloader bot
+            try:
+                sent_msg = await client.send_message(
+                    DOWNLOADER_BOT_USERNAME,
+                    text
+                )
+                if sent_msg:
+                    # Store message ID and link mapping for tracking
+                    FILE_STORE_RESPONSES[sent_msg.id] = {
+                        'original_link': link,
+                        'last_message_time': asyncio.get_event_loop().time()
+                    }
+                    logger.info(f"Sent to downloader bot, tracking message ID: {sent_msg.id}")
+            except Exception as e:
+                logger.error(f"Error sending to downloader bot: {str(e)}")
 
     except Exception as e:
         logger.error(f"Error processing message: {e}")
@@ -175,23 +183,23 @@ async def handle_downloader_response(event: Message):
             mime_type = event.media.document.mime_type
             # Check if it's a video or document
             if mime_type.startswith('video/') or not mime_type.startswith('image/'):
-                # Forward to file store bot and track the message
+                # Forward to file store bot
                 forwarded = await event.forward_to(FILE_STORE_BOT_USERNAME)
                 if forwarded:
-                    # Store message ID for tracking
-                    FILE_STORE_RESPONSES[forwarded.id] = {
-                        'event': asyncio.Event(),
-                        'original_link': None,  # Will be set when processing file store response
-                        'last_message_time': asyncio.get_event_loop().time()  # Track time for cleanup
-                    }
-                    logger.info(f"Forwarded file to store bot with ID: {forwarded.id}")
-            else:
-                logger.debug("Ignored non-video/document media from downloader bot")
-        else:
-            logger.debug("Ignored non-media message from downloader bot")
-                
+                    logger.info(f"Forwarded file to file store bot with ID: {forwarded.id}")
+                    
+                    # Transfer the tracking data to new message ID
+                    if event.reply_to and event.reply_to.reply_to_msg_id in FILE_STORE_RESPONSES:
+                        original_data = FILE_STORE_RESPONSES[event.reply_to.reply_to_msg_id]
+                        FILE_STORE_RESPONSES[forwarded.id] = {
+                            'original_link': original_data['original_link'],
+                            'last_message_time': asyncio.get_event_loop().time()
+                        }
+                else:
+                    logger.error("Failed to forward to file store bot")
+
     except Exception as e:
-        logger.error(f"Error handling downloader response: {e}")
+        logger.error(f"Error handling downloader response: {str(e)}")
 
 async def handle_file_store_response(event: Message):
     """Handle responses from the file store bot."""
@@ -215,50 +223,40 @@ async def handle_file_store_response(event: Message):
             
             if recent_response:
                 try:
-                    # Get original link and thumbnail
+                    # Get the original thumbnail for this link
                     original_link = recent_response.get('original_link')
-                    thumbnail_data = LINK_THUMBNAIL_MAP.get(original_link) if original_link else None
-                    
-                    if thumbnail_data:
-                        logger.info("Found matching thumbnail for file store link")
-                        # Create temporary file for thumbnail
+                    if original_link and original_link in LINK_THUMBNAIL_MAP:
+                        thumbnail_data = LINK_THUMBNAIL_MAP[original_link]
+                        logger.info(f"Found saved thumbnail for link: {original_link}")
+                        
+                        # Create temporary file for the saved thumbnail
                         with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_thumb:
                             temp_thumb.write(thumbnail_data)
                             temp_thumb.flush()
                             
-                            try:
-                                # Send thumbnail with file store link as caption
-                                await client.send_file(
-                                    entity=DESTINATION_CHANNEL_ID,
-                                    file=temp_thumb.name,
-                                    caption=file_store_message,
-                                    parse_mode='html',
-                                    force_document=False  # Send as photo, not document
-                                )
-                                logger.info("Successfully sent thumbnail with file store link")
-                            except Exception as send_error:
-                                logger.error(f"Error sending file: {str(send_error)}")
-                                # Fallback to sending without thumbnail
-                                await client.send_message(
-                                    DESTINATION_CHANNEL_ID,
-                                    file_store_message,
-                                    parse_mode='html'
-                                )
+                            # Send the saved thumbnail with file store link as caption
+                            await client.send_file(
+                                entity=DESTINATION_CHANNEL_ID,
+                                file=temp_thumb.name,
+                                caption=file_store_message,
+                                parse_mode='html',
+                                force_document=False
+                            )
+                            logger.info("Successfully sent original thumbnail with file store link")
                             
                             # Cleanup
                             os.unlink(temp_thumb.name)
-                            if original_link in LINK_THUMBNAIL_MAP:
-                                del LINK_THUMBNAIL_MAP[original_link]
+                            del LINK_THUMBNAIL_MAP[original_link]
                     else:
-                        logger.info("No thumbnail found for file store link")
-                        # Send just the message if no thumbnail
+                        # If no thumbnail found, send just the message
                         await client.send_message(
                             DESTINATION_CHANNEL_ID,
                             file_store_message,
                             parse_mode='html'
                         )
+                        logger.info("Sent file store link (no thumbnail available)")
                     
-                    # Cleanup response tracking
+                    # Cleanup tracking data
                     if recent_id in FILE_STORE_RESPONSES:
                         del FILE_STORE_RESPONSES[recent_id]
                     
