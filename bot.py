@@ -113,14 +113,25 @@ async def process_message(event: Message):
 async def handle_downloader_response(event: Message):
     """Handle responses from the downloader bot."""
     try:
-        if not event.media or not isinstance(event.media, MessageMediaDocument):
+        logger.info(f"Received response from downloader bot - Message ID: {event.id}")
+        
+        # First check if this is a media message
+        if not event.media:
+            logger.info("Message contains no media, skipping...")
             return
             
         # Check if this is a response to our message
-        if not event.reply_to or event.reply_to.reply_to_msg_id not in MSG_TO_LINK:
+        if not event.reply_to:
+            logger.info("Message is not a reply, skipping...")
             return
             
         original_msg_id = event.reply_to.reply_to_msg_id
+        logger.info(f"Original message ID: {original_msg_id}")
+        
+        if original_msg_id not in MSG_TO_LINK:
+            logger.info(f"Message ID {original_msg_id} not found in MSG_TO_LINK mapping")
+            return
+            
         terabox_link = MSG_TO_LINK[original_msg_id]
         link_data = LINK_DATA.get(terabox_link)
         
@@ -128,22 +139,24 @@ async def handle_downloader_response(event: Message):
             logger.error(f"No LinkData found for message ID: {original_msg_id}")
             return
             
-        mime_type = event.media.document.mime_type
-        if mime_type.startswith('video/') or not mime_type.startswith('image/'):
-            logger.info(f"Received valid media from downloader bot for link: {terabox_link}")
-            
-            # Forward to file store bot
-            try:
-                forwarded = await event.forward_to(FILE_STORE_BOT_USERNAME)
-                if forwarded:
-                    link_data.file_store_msg_id = forwarded.id
-                    MSG_TO_LINK[forwarded.id] = terabox_link
-                    logger.info(f"Forwarded to file store bot, message ID: {forwarded.id}")
-            except Exception as e:
-                logger.error(f"Error forwarding to file store bot: {e}")
+        logger.info(f"Processing downloaded content for link: {terabox_link}")
+        
+        # Forward to file store bot
+        try:
+            logger.info("Attempting to forward to file store bot...")
+            forwarded = await event.forward_to(FILE_STORE_BOT_USERNAME)
+            if forwarded:
+                link_data.file_store_msg_id = forwarded.id
+                MSG_TO_LINK[forwarded.id] = terabox_link
+                logger.info(f"Successfully forwarded to file store bot, message ID: {forwarded.id}")
+            else:
+                logger.error("Failed to forward message to file store bot")
+        except Exception as e:
+            logger.error(f"Error forwarding to file store bot: {str(e)}")
 
     except Exception as e:
-        logger.error(f"Error in handle_downloader_response: {e}")
+        logger.error(f"Error in handle_downloader_response: {str(e)}")
+        logger.exception("Full traceback:")
 
 @client.on(events.NewMessage(from_users=FILE_STORE_BOT_USERNAME))
 async def handle_file_store_response(event: Message):
