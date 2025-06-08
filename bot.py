@@ -12,7 +12,7 @@ from collections import defaultdict
 
 # Configure logging
 logging.basicConfig(format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s', level=logging.INFO)
-logger = logging.getLogger(_name_)
+logger = logging.getLogger(__name__)
 
 # Read configuration from environment variables
 APP_ID = config("API_ID", cast=int)
