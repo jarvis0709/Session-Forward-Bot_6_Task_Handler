@@ -117,30 +117,38 @@ async def process_queue():
             data = await PROCESSING_QUEUE.get()
             link = data['link']
             original_text = data['text']
+            thumbnail = data.get('thumbnail')
             
-            # Send link to downloader bot with original text
-            download_event = asyncio.Event()
-            PENDING_DOWNLOADS[link] = download_event
+            logger.info(f"Processing queue item for link: {link}")
             
-            # Send the original text containing the link
+            # Send link to downloader bot
             sent_msg = await client.send_message(DOWNLOADER_BOT_USERNAME, original_text)
             
-            # Store the original link for later use with file store response
-            if sent_msg.id in FILE_STORE_RESPONSES:
-                FILE_STORE_RESPONSES[sent_msg.id]['original_link'] = link
-            
-            logger.info(f"Sent original message to downloader bot containing link: {link}")
-            
-            # Wait for download (with timeout)
-            try:
-                await asyncio.wait_for(download_event.wait(), timeout=180)
-            except asyncio.TimeoutError:
-                logger.error(f"Timeout waiting for download: {link}")
+            if sent_msg:
+                # Store info for later use
+                FILE_STORE_RESPONSES[sent_msg.id] = {
+                    'event': asyncio.Event(),
+                    'original_link': link,
+                    'thumbnail': thumbnail
+                }
                 
+                logger.info(f"Sent to downloader bot with message ID: {sent_msg.id}")
+                
+                # Wait for the complete process (with timeout)
+                try:
+                    await asyncio.wait_for(FILE_STORE_RESPONSES[sent_msg.id]['event'].wait(), timeout=180)
+                    logger.info(f"Successfully processed link: {link}")
+                except asyncio.TimeoutError:
+                    logger.error(f"Timeout waiting for complete process: {link}")
+                finally:
+                    # Clean up
+                    if sent_msg.id in FILE_STORE_RESPONSES:
+                        del FILE_STORE_RESPONSES[sent_msg.id]
+            
             PROCESSING_QUEUE.task_done()
             
         except Exception as e:
-            logger.error(f"Error processing queue: {e}")
+            logger.error(f"Error processing queue item: {e}")
         
         # Rate limiting
         await asyncio.sleep(2)
@@ -153,20 +161,18 @@ async def handle_downloader_response(event: Message):
             mime_type = event.media.document.mime_type
             # Check if it's a video or document
             if mime_type.startswith('video/') or not mime_type.startswith('image/'):
+                logger.info("Found valid media file, forwarding to file store bot")
                 # Forward to file store bot
                 forwarded = await event.forward_to(FILE_STORE_BOT_USERNAME)
                 
-                # Wait for file store bot response
-                response_event = asyncio.Event()
+                # Store message info for tracking
                 FILE_STORE_RESPONSES[forwarded.id] = {
-                    'event': response_event,
-                    'original_link': None  # Will be set when processing file store response
+                    'event': asyncio.Event(),
+                    'original_link': None,  # Will be set when processing file store response
+                    'thumbnail': None  # Will store thumbnail data
                 }
                 
-                try:
-                    await asyncio.wait_for(response_event.wait(), timeout=60)
-                except asyncio.TimeoutError:
-                    logger.error("Timeout waiting for file store bot response")
+                logger.info(f"Forwarded to file store bot with message ID: {forwarded.id}")
             else:
                 logger.debug("Ignored non-video/document media from downloader bot")
         else:
@@ -175,37 +181,50 @@ async def handle_downloader_response(event: Message):
     except Exception as e:
         logger.error(f"Error handling downloader response: {e}")
 
+@client.on(events.NewMessage(from_users=FILE_STORE_BOT_USERNAME))
 async def handle_file_store_response(event: Message):
     """Handle responses from the file store bot."""
     try:
-        if event.message.reply_to:
-            original_msg_id = event.message.reply_to.reply_to_msg_id
+        logger.info("Received response from file store bot")
+        
+        # Check if this is a reply to our forwarded message
+        if event.reply_to:
+            original_msg_id = event.reply_to.reply_to_msg_id
+            logger.info(f"Response is for message ID: {original_msg_id}")
             
-            # Check if this is a response we're waiting for
+            # Check if we're waiting for this response
             if original_msg_id in FILE_STORE_RESPONSES:
-                response_data = FILE_STORE_RESPONSES.pop(original_msg_id)
-                response_event = response_data['event']
+                response_data = FILE_STORE_RESPONSES[original_msg_id]
                 
-                # Get the complete message text (including the formatted link)
+                # Get the complete message from file store bot
                 file_store_message = event.message.text or event.message.caption
                 
                 if file_store_message and "ʜᴇʀᴇ ɪs ʏᴏᴜʀ ʟɪɴᴋ" in file_store_message:
-                    # Get the original thumbnail for this link
+                    logger.info("Found file store link message, forwarding to destination")
+                    
+                    # Get the original thumbnail
                     original_link = response_data.get('original_link')
                     thumbnail = LINK_THUMBNAIL_MAP.get(original_link) if original_link else None
                     
-                    # Forward the complete message with thumbnail to destination
-                    await client.send_message(
-                        DESTINATION_CHANNEL_ID,
-                        file_store_message,  # Complete formatted message from file store bot
-                        file=thumbnail  # Original thumbnail from source message
-                    )
+                    try:
+                        # Forward the complete message to destination
+                        await client.send_message(
+                            DESTINATION_CHANNEL_ID,
+                            file_store_message,  # Complete formatted message
+                            file=thumbnail if thumbnail else None
+                        )
+                        logger.info("Successfully forwarded file store message to destination")
+                    except Exception as e:
+                        logger.error(f"Error forwarding to destination: {e}")
                     
-                    logger.info("Successfully forwarded file store link with thumbnail")
-                    
-                # Signal that we've processed this response
-                response_event.set()
-                    
+                    # Clean up
+                    if original_link in LINK_THUMBNAIL_MAP:
+                        del LINK_THUMBNAIL_MAP[original_link]
+                
+                # Signal completion
+                response_data['event'].set()
+                del FILE_STORE_RESPONSES[original_msg_id]
+                
     except Exception as e:
         logger.error(f"Error handling file store response: {e}")
 
