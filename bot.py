@@ -78,10 +78,22 @@ async def extract_terabox_links(text: str) -> List[str]:
 
 async def process_thumbnail(message: Message) -> Optional[bytes]:
     """Extract thumbnail from message if available."""
-    if message.media:
-        if isinstance(message.media, (MessageMediaPhoto, MessageMediaDocument)):
-            return await message.download_media(bytes)
-    return None
+    try:
+        if message.media:
+            if isinstance(message.media, MessageMediaPhoto):
+                # For photos, download the photo itself
+                return await message.download_media(bytes)
+            elif isinstance(message.media, MessageMediaDocument):
+                # For documents/videos, get the thumbnail
+                if message.media.document.thumbs:
+                    return await message.client.download_file(
+                        message.media.document.thumbs[0],
+                        bytes
+                    )
+        return None
+    except Exception as e:
+        logger.error(f"Error processing thumbnail: {str(e)}")
+        return None
 
 async def process_message(event: Message):
     """Process incoming messages from source channel."""
@@ -92,12 +104,20 @@ async def process_message(event: Message):
         if not terabox_links:
             return
 
-        # Get thumbnail from the message
+        logger.info(f"Found {len(terabox_links)} Terabox links in message")
+        
+        # Get thumbnail from the message first
         thumbnail = await process_thumbnail(event.message)
+        if thumbnail:
+            logger.info("Successfully extracted thumbnail from source message")
+        else:
+            logger.info("No thumbnail found in source message")
         
         for link in terabox_links:
+            # Store the thumbnail with the link
             if thumbnail:
                 LINK_THUMBNAIL_MAP[link] = thumbnail
+                logger.info(f"Stored thumbnail for link: {link}")
             
             # Add to processing queue with original text and link
             await PROCESSING_QUEUE.put({
@@ -110,6 +130,7 @@ async def process_message(event: Message):
 
     except Exception as e:
         logger.error(f"Error processing message: {e}")
+        logger.exception("Full traceback:")
 
 async def process_queue():
     """Process queued Terabox links."""
@@ -199,33 +220,43 @@ async def handle_file_store_response(event: Message):
                     thumbnail_data = LINK_THUMBNAIL_MAP.get(original_link) if original_link else None
                     
                     if thumbnail_data:
+                        logger.info("Found matching thumbnail for file store link")
                         # Create temporary file for thumbnail
                         with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_thumb:
                             temp_thumb.write(thumbnail_data)
                             temp_thumb.flush()
                             
-                            # Send thumbnail with file store link as caption
-                            await client.send_file(
-                                entity=DESTINATION_CHANNEL_ID,
-                                file=temp_thumb.name,
-                                caption=file_store_message,
-                                parse_mode='html'
-                            )
+                            try:
+                                # Send thumbnail with file store link as caption
+                                await client.send_file(
+                                    entity=DESTINATION_CHANNEL_ID,
+                                    file=temp_thumb.name,
+                                    caption=file_store_message,
+                                    parse_mode='html',
+                                    force_document=False  # Send as photo, not document
+                                )
+                                logger.info("Successfully sent thumbnail with file store link")
+                            except Exception as send_error:
+                                logger.error(f"Error sending file: {str(send_error)}")
+                                # Fallback to sending without thumbnail
+                                await client.send_message(
+                                    DESTINATION_CHANNEL_ID,
+                                    file_store_message,
+                                    parse_mode='html'
+                                )
                             
                             # Cleanup
                             os.unlink(temp_thumb.name)
                             if original_link in LINK_THUMBNAIL_MAP:
                                 del LINK_THUMBNAIL_MAP[original_link]
-                            
-                            logger.info("Successfully sent thumbnail with file store link")
                     else:
+                        logger.info("No thumbnail found for file store link")
                         # Send just the message if no thumbnail
                         await client.send_message(
                             DESTINATION_CHANNEL_ID,
                             file_store_message,
                             parse_mode='html'
                         )
-                        logger.info("Sent file store link without thumbnail")
                     
                     # Cleanup response tracking
                     if recent_id in FILE_STORE_RESPONSES:
