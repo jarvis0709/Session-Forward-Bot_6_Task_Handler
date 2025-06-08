@@ -35,7 +35,7 @@ PENDING_DOWNLOADS: Dict[str, asyncio.Event] = {}
 FILE_STORE_RESPONSES: Dict[int, asyncio.Event] = {}
 
 class Config:
-    def _init_(self):
+    def __init__(self):
         self.load_config()
 
     def load_config(self):
@@ -232,7 +232,7 @@ async def get_config(event: Message):
         return
         
     config_text = json.dumps(config_manager.data, indent=2)
-    await event.reply(f"Current configuration:\n\n{config_text}\n")
+    await event.reply(f"Current configuration:\n```\n{config_text}\n```")
 
 # Register event handlers
 client.add_event_handler(
