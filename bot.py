@@ -188,7 +188,7 @@ async def process_queue():
                     # Process with timeout for complete operation
                     await asyncio.wait_for(
                         process_single_link(link, text, thumbnail),
-                        timeout=180  # 3 minutes timeout for complete operation
+                        timeout=150  # 2.5 minutes timeout for complete operation
                     )
                     logger.info(f"Successfully processed link: {link}")
                     # No fixed delay - proceed to next link immediately
