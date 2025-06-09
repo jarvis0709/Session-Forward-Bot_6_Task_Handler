@@ -114,7 +114,8 @@ async def extract_terabox_links(message: Message) -> List[str]:
     if message.entities:
         text = message.raw_text
         
-    pattern = r'(?:https?://(?:www\.)?(?:1024terabox\.com|terabox\.com|teraboxlink\.com|terafileshare\.com|teraboxshare\.com|teraboxapp\.com)/\S+)'
+    #pattern = r'(?:https?://(?:www\.)?(?:1024terabox\.com|terabox\.com|teraboxlink\.com|terafileshare\.com|teraboxshare\.com|teraboxapp\.com)/\S+)'
+    pattern = r'(?:https?://(?:www\.)?(?:1024terabox\.com|terabox\.com|teraboxlink\.com|terafileshare\.com|teraboxshare\.com|teraboxapp\.com|terasharelink\.com)/\S+)'
     matches = re.finditer(pattern, text)
     return [match.group(0) for match in matches]
 
