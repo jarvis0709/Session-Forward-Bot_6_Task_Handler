@@ -6,7 +6,7 @@ from telethon import TelegramClient, events
 from decouple import config
 import logging
 from telethon.sessions import StringSession
-from telethon.tl.types import Message, MessageMediaPhoto, MessageMediaDocument
+from telethon.tl.types import Message, MessageMediaPhoto, MessageMediaDocument, DocumentAttributeSticker
 from typing import Dict, Optional, List, Tuple
 from collections import defaultdict
 import tempfile
@@ -51,14 +51,21 @@ def is_allowed_media(message: Message) -> bool:
     if not message.media or not isinstance(message.media, MessageMediaDocument):
         return False
         
-    mime_type = message.media.document.mime_type
+    document = message.media.document
     
-    # Check for GIF
-    if mime_type == 'image/gif':
-        return True
-        
-    # Check for videos, audio, and files
-    return any(mime_type.startswith(allowed_type) for allowed_type in ALLOWED_MIME_TYPES)
+    # Skip stickers
+    for attr in document.attributes:
+        if isinstance(attr, DocumentAttributeSticker):
+            return False
+            
+    mime_type = document.mime_type
+    
+    # Only allow videos, audio, and general files
+    return (
+        mime_type.startswith('video/') or 
+        mime_type.startswith('audio/') or 
+        mime_type.startswith('application/')
+    )
 
 class Config:
     def __init__(self):
@@ -104,7 +111,6 @@ async def extract_terabox_links(message: Message) -> List[str]:
     
     # Handle bold/formatted text by getting raw text
     if message.entities:
-        # Get text without formatting
         text = message.raw_text
         
     pattern = r'(?:https?://(?:www\.)?(?:1024terabox\.com|terabox\.com|teraboxlink\.com|terafileshare\.com|teraboxshare\.com|teraboxapp\.com)/\S+)'
@@ -143,13 +149,15 @@ async def message_processor():
                     except Exception as e:
                         logger.error(f"Error saving thumbnail: {str(e)}")
                 
-                # Add to link processing queue
-                await LINK_QUEUE.put({
-                    'links': terabox_links,
-                    'text': message.text or message.caption or "",
-                    'thumbnail': thumbnail,
-                    'original_message': message
-                })
+                # Add each link separately to the queue with same thumbnail
+                for link in terabox_links:
+                    await LINK_QUEUE.put({
+                        'link': link,
+                        'text': message.text or message.caption or "",
+                        'thumbnail': thumbnail,
+                        'original_message': message
+                    })
+                    logger.info(f"Queued link for processing: {link}")
             else:
                 logger.info("No Terabox links found in message, skipping")
             
@@ -172,34 +180,34 @@ async def process_queue():
                     
                 data = await LINK_QUEUE.get()
                 CURRENT_PROCESSING = data
-                links = data['links']
+                link = data['link']
                 text = data['text']
                 thumbnail = data['thumbnail']
                 
-                for link in links:
-                    try:
-                        # Process with timeout
-                        await asyncio.wait_for(
-                            process_single_link(link, text, thumbnail),
-                            timeout=180  # 3 minutes timeout
-                        )
-                        logger.info(f"Successfully processed link: {link}")
-                        # Wait 10 seconds before next link
-                        await asyncio.sleep(10)
-                        
-                    except asyncio.TimeoutError:
-                        logger.error(f"Processing timeout for link: {link}")
-                        # Cleanup on timeout
-                        if link in LINK_THUMBNAIL_MAP:
-                            del LINK_THUMBNAIL_MAP[link]
-                        if link in PENDING_DOWNLOADS:
-                            del PENDING_DOWNLOADS[link]
+                try:
+                    # Process with timeout
+                    await asyncio.wait_for(
+                        process_single_link(link, text, thumbnail),
+                        timeout=180  # 3 minutes timeout
+                    )
+                    logger.info(f"Successfully processed link: {link}")
+                    # Wait 10 seconds before next link
+                    await asyncio.sleep(10)
                     
-                    except Exception as e:
-                        logger.error(f"Error processing link {link}: {str(e)}")
-                
-                CURRENT_PROCESSING = None
-                LINK_QUEUE.task_done()
+                except asyncio.TimeoutError:
+                    logger.error(f"Processing timeout for link: {link}")
+                    # Cleanup on timeout
+                    if link in LINK_THUMBNAIL_MAP:
+                        del LINK_THUMBNAIL_MAP[link]
+                    if link in PENDING_DOWNLOADS:
+                        del PENDING_DOWNLOADS[link]
+                    
+                except Exception as e:
+                    logger.error(f"Error processing link {link}: {str(e)}")
+                    
+                finally:
+                    CURRENT_PROCESSING = None
+                    LINK_QUEUE.task_done()
                     
         except Exception as e:
             logger.error(f"Queue processor error: {str(e)}")
@@ -212,10 +220,15 @@ async def process_single_link(link: str, text: str, thumbnail: Optional[bytes] =
             LINK_THUMBNAIL_MAP[link] = thumbnail
             logger.info(f"Mapped thumbnail to Terabox link: {link}")
         
+        # Create message text with single link
+        message_text = text
+        if link not in text:
+            message_text = f"{text}\n{link}"
+        
         # Send to downloader bot
         sent_msg = await client.send_message(
             DOWNLOADER_BOT_USERNAME,
-            text
+            message_text
         )
         
         if sent_msg:
@@ -255,7 +268,7 @@ async def handle_downloader_response(event: Message):
             else:
                 logger.error("Failed to forward to file store bot")
         else:
-            logger.info("Skipping non-allowed media type")
+            logger.info("Skipping non-allowed media type or sticker")
 
     except Exception as e:
         logger.error(f"Error handling downloader response: {str(e)}")
