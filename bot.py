@@ -185,14 +185,13 @@ async def process_queue():
                 thumbnail = data['thumbnail']
                 
                 try:
-                    # Process with timeout
+                    # Process with timeout for complete operation
                     await asyncio.wait_for(
                         process_single_link(link, text, thumbnail),
-                        timeout=180  # 3 minutes timeout
+                        timeout=180  # 3 minutes timeout for complete operation
                     )
                     logger.info(f"Successfully processed link: {link}")
-                    # Wait 10 seconds before next link
-                    await asyncio.sleep(10)
+                    # No fixed delay - proceed to next link immediately
                     
                 except asyncio.TimeoutError:
                     logger.error(f"Processing timeout for link: {link}")
@@ -201,6 +200,10 @@ async def process_queue():
                         del LINK_THUMBNAIL_MAP[link]
                     if link in PENDING_DOWNLOADS:
                         del PENDING_DOWNLOADS[link]
+                    # Clean up any associated file store responses
+                    for msg_id, data in list(FILE_STORE_RESPONSES.items()):
+                        if data.get('original_link') == link:
+                            del FILE_STORE_RESPONSES[msg_id]
                     
                 except Exception as e:
                     logger.error(f"Error processing link {link}: {str(e)}")
@@ -220,22 +223,18 @@ async def process_single_link(link: str, text: str, thumbnail: Optional[bytes] =
             LINK_THUMBNAIL_MAP[link] = thumbnail
             logger.info(f"Mapped thumbnail to Terabox link: {link}")
         
-        # Create message text with single link
-        message_text = text
-        if link not in text:
-            message_text = f"{text}\n{link}"
-        
-        # Send to downloader bot
+        # Send only the link to downloader bot
         sent_msg = await client.send_message(
             DOWNLOADER_BOT_USERNAME,
-            message_text
+            link  # Only send the link, not the full caption
         )
         
         if sent_msg:
             # Store message ID and link mapping for tracking
             FILE_STORE_RESPONSES[sent_msg.id] = {
                 'original_link': link,
-                'last_message_time': asyncio.get_event_loop().time()
+                'last_message_time': asyncio.get_event_loop().time(),
+                'original_text': text  # Store original text for later use
             }
             logger.info(f"Sent to downloader bot, tracking message ID: {sent_msg.id}")
             
