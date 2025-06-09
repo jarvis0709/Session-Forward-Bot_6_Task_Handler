@@ -30,7 +30,7 @@ DESTINATION_CHANNEL_ID = config("DESTINATION_CHANNEL_ID", cast=int)
 
 # Constants
 CONFIG_FILE = "config.json"
-TERABOX_REGEX = r"(?:https?://(?:www\.)?(?:1024terabox\.com|terabox\.com|teraboxlink\.com|terafileshare\.com|teraboxshare\.com|teraboxapp\.com)/\S+)"
+TERABOX_REGEX = r"(?:https?://(?:www\.)?(?:1024terabox\.com|terabox\.com|terasharelink\.com|teraboxlink\.com|terafileshare\.com|teraboxshare\.com|teraboxapp\.com)/\S+)"
 MESSAGE_QUEUE = asyncio.Queue()  # Queue for all source channel messages
 LINK_QUEUE = asyncio.Queue()    # Queue for messages with Terabox links
 LINK_THUMBNAIL_MAP: Dict[str, bytes] = {}
