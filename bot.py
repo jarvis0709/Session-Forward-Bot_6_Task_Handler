@@ -29,25 +29,9 @@ FILE_STORE_BOT_USERNAME = config("FILE_STORE_BOT_USERNAME")
 #DESTINATION_CHANNEL_ID = -1002834072043
 DESTINATION_CHANNEL_ID = config("DESTINATION_CHANNEL_ID", cast=int)
 
-TERABOX_DOMAINS = [
-    "1024terabox.com",
-    "terabox.com",
-    "terasharelink.com",
-    "teraboxlink.com",
-    "terafileshare.com",
-    "teraboxshare.com",
-    "teraboxapp.com"
-]
-
-# Constants
-TERABOX_REGEX = re.compile(
-    r"https?://[^\s]*(" + "|".join(map(re.escape, TERABOX_DOMAINS)) + r")[^\s]*",
-    re.IGNORECASE
-)
 
 CONFIG_FILE = "config.json"
-#TERABOX_REGEX = r"(?:https?://(?:www\.)?(?:1024terabox\.com|terabox\.com|terasharelink\.com|teraboxlink\.com|terafileshare\.com|teraboxshare\.com|teraboxapp\.com)/\S+)"
-#TERABOX_REGEX = r"https?://(?:www\.)?(1024terabox\.com|terabox\.com|terasharelink\.com|teraboxlink\.com|terafileshare\.com|teraboxshare\.com|teraboxapp\.com)/[^\s]+"
+TERABOX_REGEX = r"(?:https?://(?:www\.)?(?:1024terabox\.com|terabox\.com|terasharelink\.com|teraboxlink\.com|terafileshare\.com|teraboxshare\.com|teraboxapp\.com)/[^\s]+)"
 MESSAGE_QUEUE = asyncio.Queue()  # Queue for all source channel messages
 LINK_QUEUE = asyncio.Queue()    # Queue for messages with Terabox links
 LINK_THUMBNAIL_MAP: Dict[str, bytes] = {}
