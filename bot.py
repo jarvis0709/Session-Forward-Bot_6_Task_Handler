@@ -10,6 +10,7 @@ from telethon.tl.types import Message, MessageMediaPhoto, MessageMediaDocument
 from typing import Dict, Optional, List, Tuple
 from collections import defaultdict
 import tempfile
+from telethon.helpers import strip_text
 
 # Configure logging
 logging.basicConfig(format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s', level=logging.INFO)
@@ -30,7 +31,8 @@ DESTINATION_CHANNEL_ID = config("DESTINATION_CHANNEL_ID", cast=int)
 # Constants
 CONFIG_FILE = "config.json"
 TERABOX_REGEX = r"(?:https?://(?:www\.)?(?:1024terabox\.com|terabox\.com|teraboxlink\.com|terafileshare\.com|teraboxshare\.com|teraboxapp\.com)/\S+)"
-PROCESSING_QUEUE = asyncio.Queue()
+MESSAGE_QUEUE = asyncio.Queue()  # Queue for all source channel messages
+LINK_QUEUE = asyncio.Queue()    # Queue for messages with Terabox links
 LINK_THUMBNAIL_MAP: Dict[str, bytes] = {}
 PENDING_DOWNLOADS: Dict[str, asyncio.Event] = {}
 FILE_STORE_RESPONSES: Dict[int, dict] = {}
@@ -73,62 +75,63 @@ except Exception as ap:
 
 async def extract_terabox_links(text: str) -> List[str]:
     """Extract Terabox links from text without modifying them."""
-    # Use non-capturing groups (?:) to match but not modify the links
+    if not text:
+        return []
+        
+    # Strip any formatting to handle bold/italic text
+    clean_text = strip_text(text)
     pattern = r'(?:https?://(?:www\.)?(?:1024terabox\.com|terabox\.com|teraboxlink\.com|terafileshare\.com|teraboxshare\.com|teraboxapp\.com)/\S+)'
-    matches = re.finditer(pattern, text)
-    return [match.group(0) for match in matches]  # Return exact matches without modification
-
-async def process_thumbnail(message: Message) -> Optional[bytes]:
-    """Extract thumbnail from message if available."""
-    try:
-        if message.media:
-            if isinstance(message.media, MessageMediaPhoto):
-                # For photos, download the photo itself
-                return await message.download_media(bytes)
-            elif isinstance(message.media, MessageMediaDocument):
-                # For documents/videos, get the thumbnail
-                if message.media.document.thumbs:
-                    return await message.client.download_file(
-                        message.media.document.thumbs[0],
-                        bytes
-                    )
-        return None
-    except Exception as e:
-        logger.error(f"Error processing thumbnail: {str(e)}")
-        return None
+    matches = re.finditer(pattern, clean_text)
+    return [match.group(0) for match in matches]
 
 async def process_message(event: Message):
-    """Process incoming messages from source channel."""
+    """Queue incoming messages from source channel."""
     try:
-        text = event.message.text or event.message.caption or ""
-        terabox_links = await extract_terabox_links(text)
-        
-        if not terabox_links:
-            return
-
-        logger.info(f"Found {len(terabox_links)} Terabox links in message")
-
-        # First get the thumbnail from source message
-        thumbnail = None
-        if event.message.media:
-            try:
-                thumbnail = await event.message.download_media(bytes)
-                logger.info("Successfully saved thumbnail from source message")
-            except Exception as e:
-                logger.error(f"Error saving thumbnail: {str(e)}")
-        
-        # Add each link to queue instead of processing immediately
-        for link in terabox_links:
-            await PROCESSING_QUEUE.put({
-                'link': link,
-                'text': text,
-                'thumbnail': thumbnail
-            })
-            logger.info(f"Added link to queue: {link}")
-
+        # Add every message to queue immediately
+        await MESSAGE_QUEUE.put(event.message)
+        logger.info("Added new message to queue")
     except Exception as e:
-        logger.error(f"Error processing message: {e}")
+        logger.error(f"Error queueing message: {e}")
         logger.exception("Full traceback:")
+
+async def message_processor():
+    """Process messages from MESSAGE_QUEUE and check for Terabox links."""
+    while True:
+        try:
+            # Get message from queue
+            message = await MESSAGE_QUEUE.get()
+            text = message.text or message.caption or ""
+            
+            # Extract links
+            terabox_links = await extract_terabox_links(text)
+            
+            if terabox_links:
+                logger.info(f"Found {len(terabox_links)} Terabox links in message")
+                
+                # Get thumbnail if available
+                thumbnail = None
+                if message.media:
+                    try:
+                        thumbnail = await message.download_media(bytes)
+                        logger.info("Successfully saved thumbnail from source message")
+                    except Exception as e:
+                        logger.error(f"Error saving thumbnail: {str(e)}")
+                
+                # Add to link processing queue
+                await LINK_QUEUE.put({
+                    'links': terabox_links,
+                    'text': text,
+                    'thumbnail': thumbnail,
+                    'original_message': message
+                })
+            else:
+                logger.info("No Terabox links found in message, skipping")
+            
+            MESSAGE_QUEUE.task_done()
+            
+        except Exception as e:
+            logger.error(f"Error in message processor: {e}")
+            await asyncio.sleep(1)
 
 async def process_queue():
     """Process queued Terabox links."""
@@ -141,34 +144,36 @@ async def process_queue():
                     await asyncio.sleep(1)
                     continue
                     
-                data = await PROCESSING_QUEUE.get()
+                data = await LINK_QUEUE.get()
                 CURRENT_PROCESSING = data
-                link = data['link']
+                links = data['links']
                 text = data['text']
                 thumbnail = data['thumbnail']
                 
-                try:
-                    # Process with timeout
-                    await asyncio.wait_for(
-                        process_single_link(link, text, thumbnail),
-                        timeout=180  # 3 minutes timeout
-                    )
-                    logger.info(f"Successfully processed link: {link}")
+                for link in links:
+                    try:
+                        # Process with timeout
+                        await asyncio.wait_for(
+                            process_single_link(link, text, thumbnail),
+                            timeout=180  # 3 minutes timeout
+                        )
+                        logger.info(f"Successfully processed link: {link}")
+                        # Wait 10 seconds before next link
+                        await asyncio.sleep(10)
+                        
+                    except asyncio.TimeoutError:
+                        logger.error(f"Processing timeout for link: {link}")
+                        # Cleanup on timeout
+                        if link in LINK_THUMBNAIL_MAP:
+                            del LINK_THUMBNAIL_MAP[link]
+                        if link in PENDING_DOWNLOADS:
+                            del PENDING_DOWNLOADS[link]
                     
-                except asyncio.TimeoutError:
-                    logger.error(f"Processing timeout for link: {link}")
-                    # Cleanup on timeout
-                    if link in LINK_THUMBNAIL_MAP:
-                        del LINK_THUMBNAIL_MAP[link]
-                    if link in PENDING_DOWNLOADS:
-                        del PENDING_DOWNLOADS[link]
-                    
-                except Exception as e:
-                    logger.error(f"Error processing link {link}: {str(e)}")
-                    
-                finally:
-                    CURRENT_PROCESSING = None
-                    PROCESSING_QUEUE.task_done()
+                    except Exception as e:
+                        logger.error(f"Error processing link {link}: {str(e)}")
+                
+                CURRENT_PROCESSING = None
+                LINK_QUEUE.task_done()
                     
         except Exception as e:
             logger.error(f"Queue processor error: {str(e)}")
@@ -390,7 +395,8 @@ async def main():
     try:
         print("Bot has started.")
         
-        # Start the queue processor
+        # Start the message and link processors
+        message_processor_task = asyncio.create_task(message_processor())
         queue_processor = asyncio.create_task(process_queue())
         
         # Start the client
