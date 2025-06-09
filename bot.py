@@ -274,7 +274,7 @@ async def handle_downloader_response(event: Message):
     except Exception as e:
         logger.error(f"Error handling downloader response: {str(e)}")
 
-async def handle_file_store_response(event: Message):
+'''async def handle_file_store_response(event: Message):
     """Handle responses from the file store bot."""
     try:
         # Get message text/caption
@@ -346,7 +346,82 @@ async def handle_file_store_response(event: Message):
                 
     except Exception as e:
         logger.error(f"Error handling file store response: {str(e)}")
+        logger.exception("Full traceback:")'''
+
+async def handle_file_store_response(event: Message):
+    """Handle responses from the file store bot."""
+    try:
+        # Get message text/caption
+        file_store_message = event.message.text or event.message.caption
+        
+        # Check if this is a file store link message
+        if file_store_message and "🖇️ Link:" in file_store_message:
+            # Find the most recent pending file store response
+            current_time = asyncio.get_event_loop().time()
+            recent_response = None
+            recent_id = None
+            
+            # Find the most recent pending response within last 60 seconds
+            for msg_id, data in FILE_STORE_RESPONSES.items():
+                if current_time - data['last_message_time'] < 60:  # Within last 60 seconds
+                    if not recent_response or data['last_message_time'] > FILE_STORE_RESPONSES[recent_id]['last_message_time']:
+                        recent_response = data
+                        recent_id = msg_id
+            
+            if recent_response:
+                try:
+                    # Get the original thumbnail for this link
+                    original_link = recent_response.get('original_link')
+                    if original_link and original_link in LINK_THUMBNAIL_MAP:
+                        thumbnail_data = LINK_THUMBNAIL_MAP[original_link]
+                        logger.info(f"Found saved thumbnail for link: {original_link}")
+                        
+                        # Create temporary file for the saved thumbnail
+                        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_thumb:
+                            temp_thumb.write(thumbnail_data)
+                            temp_thumb.flush()
+                            
+                            # Send the saved thumbnail with file store link as caption
+                            await client.send_file(
+                                entity=DESTINATION_CHANNEL_ID,
+                                file=temp_thumb.name,
+                                caption=file_store_message,
+                                parse_mode='html',
+                                force_document=False
+                            )
+                            logger.info("Successfully sent original thumbnail with file store link")
+                            
+                            # Cleanup
+                            os.unlink(temp_thumb.name)
+                            del LINK_THUMBNAIL_MAP[original_link]
+                    else:
+                        # If no thumbnail found, send just the message
+                        await client.send_message(
+                            DESTINATION_CHANNEL_ID,
+                            file_store_message,
+                            parse_mode='html'
+                        )
+                        logger.info("Sent file store link (no thumbnail available)")
+                    
+                    # Cleanup tracking data
+                    if recent_id in FILE_STORE_RESPONSES:
+                        del FILE_STORE_RESPONSES[recent_id]
+                    
+                except Exception as e:
+                    logger.error(f"Error sending to destination: {str(e)}")
+                    # Fallback: send just the message
+                    await client.send_message(
+                        DESTINATION_CHANNEL_ID,
+                        file_store_message,
+                        parse_mode='html'
+                    )
+            else:
+                logger.warning("No recent file store response found to process")
+                
+    except Exception as e:
+        logger.error(f"Error handling file store response: {str(e)}")
         logger.exception("Full traceback:")
+
 
 @client.on(events.NewMessage(pattern='/start'))
 async def start_command(event: Message):
