@@ -10,7 +10,6 @@ from telethon.tl.types import Message, MessageMediaPhoto, MessageMediaDocument
 from typing import Dict, Optional, List, Tuple
 from collections import defaultdict
 import tempfile
-from datetime import datetime
 
 # Configure logging
 logging.basicConfig(format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s', level=logging.INFO)
@@ -31,113 +30,12 @@ DESTINATION_CHANNEL_ID = config("DESTINATION_CHANNEL_ID", cast=int)
 # Constants
 CONFIG_FILE = "config.json"
 TERABOX_REGEX = r"(?:https?://(?:www\.)?(?:1024terabox\.com|terabox\.com|teraboxlink\.com|terafileshare\.com|teraboxshare\.com|teraboxapp\.com)/\S+)"
-MAX_PROCESS_TIME = 180  # 3 minutes timeout
-
-# Enhanced queue and tracking systems
-class LinkProcessor:
-    def __init__(self):
-        self.processing_queue = asyncio.Queue()
-        self.current_processing = None
-        self.link_status = {}  # Track status of each link
-        self.link_thumbnail_map = {}
-        self.file_store_responses = {}
-        self.processing_lock = asyncio.Lock()
-        
-    async def add_to_queue(self, link: str, text: str, thumbnail: Optional[bytes] = None):
-        """Add a new link to the processing queue."""
-        item = {
-            'link': link,
-            'text': text,
-            'thumbnail': thumbnail,
-            'timestamp': datetime.now(),
-            'status': 'queued'
-        }
-        self.link_status[link] = item
-        await self.processing_queue.put(item)
-        logger.info(f"Added link to queue: {link}")
-        
-    async def process_next(self):
-        """Process the next item in the queue."""
-        while True:
-            try:
-                async with self.processing_lock:
-                    if self.current_processing:
-                        await asyncio.sleep(1)
-                        continue
-                        
-                    item = await self.processing_queue.get()
-                    self.current_processing = item
-                    link = item['link']
-                    
-                    logger.info(f"Starting to process link: {link}")
-                    item['status'] = 'processing'
-                    
-                    try:
-                        # Process with timeout
-                        await asyncio.wait_for(
-                            self._process_single_item(item),
-                            timeout=MAX_PROCESS_TIME
-                        )
-                        logger.info(f"Successfully processed link: {link}")
-                        item['status'] = 'completed'
-                        
-                    except asyncio.TimeoutError:
-                        logger.error(f"Processing timeout for link: {link}")
-                        item['status'] = 'timeout'
-                        
-                    except Exception as e:
-                        logger.error(f"Error processing link {link}: {str(e)}")
-                        item['status'] = 'failed'
-                        
-                    finally:
-                        # Cleanup
-                        if link in self.link_thumbnail_map:
-                            del self.link_thumbnail_map[link]
-                        self.current_processing = None
-                        self.processing_queue.task_done()
-                        
-            except Exception as e:
-                logger.error(f"Queue processor error: {str(e)}")
-                await asyncio.sleep(1)
-                
-    async def _process_single_item(self, item):
-        """Process a single queue item with proper tracking."""
-        link = item['link']
-        text = item['text']
-        thumbnail = item['thumbnail']
-        
-        if thumbnail:
-            self.link_thumbnail_map[link] = thumbnail
-            
-        # Create completion event for this item
-        complete_event = asyncio.Event()
-        self.link_status[link]['complete_event'] = complete_event
-        
-        try:
-            # Send to downloader bot
-            sent_msg = await client.send_message(
-                DOWNLOADER_BOT_USERNAME,
-                text
-            )
-            
-            if sent_msg:
-                msg_id = sent_msg.id
-                self.file_store_responses[msg_id] = {
-                    'original_link': link,
-                    'last_message_time': asyncio.get_event_loop().time(),
-                    'complete_event': complete_event
-                }
-                logger.info(f"Sent to downloader bot, tracking message ID: {msg_id}")
-                
-                # Wait for completion
-                await complete_event.wait()
-                
-        except Exception as e:
-            logger.error(f"Error processing item {link}: {str(e)}")
-            raise
-
-# Initialize processor
-link_processor = LinkProcessor()
+PROCESSING_QUEUE = asyncio.Queue()
+LINK_THUMBNAIL_MAP: Dict[str, bytes] = {}
+PENDING_DOWNLOADS: Dict[str, asyncio.Event] = {}
+FILE_STORE_RESPONSES: Dict[int, dict] = {}
+CURRENT_PROCESSING = None
+PROCESSING_LOCK = asyncio.Lock()
 
 class Config:
     def __init__(self):
@@ -209,8 +107,8 @@ async def process_message(event: Message):
             return
 
         logger.info(f"Found {len(terabox_links)} Terabox links in message")
-        
-        # Get thumbnail if available
+
+        # First get the thumbnail from source message
         thumbnail = None
         if event.message.media:
             try:
@@ -219,13 +117,118 @@ async def process_message(event: Message):
             except Exception as e:
                 logger.error(f"Error saving thumbnail: {str(e)}")
         
-        # Add each link to the processing queue
+        # Add each link to queue instead of processing immediately
         for link in terabox_links:
-            await link_processor.add_to_queue(link, text, thumbnail)
+            await PROCESSING_QUEUE.put({
+                'link': link,
+                'text': text,
+                'thumbnail': thumbnail
+            })
+            logger.info(f"Added link to queue: {link}")
 
     except Exception as e:
         logger.error(f"Error processing message: {e}")
         logger.exception("Full traceback:")
+
+async def process_queue():
+    """Process queued Terabox links."""
+    global CURRENT_PROCESSING
+    
+    while True:
+        try:
+            async with PROCESSING_LOCK:
+                if CURRENT_PROCESSING:
+                    await asyncio.sleep(1)
+                    continue
+                    
+                data = await PROCESSING_QUEUE.get()
+                CURRENT_PROCESSING = data
+                link = data['link']
+                text = data['text']
+                thumbnail = data['thumbnail']
+                
+                try:
+                    # Process with timeout
+                    await asyncio.wait_for(
+                        process_single_link(link, text, thumbnail),
+                        timeout=180  # 3 minutes timeout
+                    )
+                    logger.info(f"Successfully processed link: {link}")
+                    
+                except asyncio.TimeoutError:
+                    logger.error(f"Processing timeout for link: {link}")
+                    # Cleanup on timeout
+                    if link in LINK_THUMBNAIL_MAP:
+                        del LINK_THUMBNAIL_MAP[link]
+                    if link in PENDING_DOWNLOADS:
+                        del PENDING_DOWNLOADS[link]
+                    
+                except Exception as e:
+                    logger.error(f"Error processing link {link}: {str(e)}")
+                    
+                finally:
+                    CURRENT_PROCESSING = None
+                    PROCESSING_QUEUE.task_done()
+                    
+        except Exception as e:
+            logger.error(f"Queue processor error: {str(e)}")
+            await asyncio.sleep(1)
+
+async def process_single_link(link: str, text: str, thumbnail: Optional[bytes] = None):
+    """Process a single link with all steps."""
+    try:
+        if thumbnail:
+            LINK_THUMBNAIL_MAP[link] = thumbnail
+            logger.info(f"Mapped thumbnail to Terabox link: {link}")
+        
+        # Send to downloader bot
+        sent_msg = await client.send_message(
+            DOWNLOADER_BOT_USERNAME,
+            text
+        )
+        
+        if sent_msg:
+            # Store message ID and link mapping for tracking
+            FILE_STORE_RESPONSES[sent_msg.id] = {
+                'original_link': link,
+                'last_message_time': asyncio.get_event_loop().time()
+            }
+            logger.info(f"Sent to downloader bot, tracking message ID: {sent_msg.id}")
+            
+            # Create and wait for download event
+            download_event = asyncio.Event()
+            PENDING_DOWNLOADS[link] = download_event
+            await download_event.wait()
+            
+    except Exception as e:
+        logger.error(f"Error in process_single_link: {str(e)}")
+        raise
+
+async def handle_downloader_response(event: Message):
+    """Handle responses from the downloader bot."""
+    try:
+        # Check if the message has media and is a document
+        if event.media and isinstance(event.media, MessageMediaDocument):
+            mime_type = event.media.document.mime_type
+            # Check if it's a video or document
+            if mime_type.startswith('video/') or not mime_type.startswith('image/'):
+                # Forward to file store bot
+                forwarded = await event.forward_to(FILE_STORE_BOT_USERNAME)
+                if forwarded:
+                    logger.info(f"Forwarded file to file store bot with ID: {forwarded.id}")
+                    
+                    # Transfer the tracking data to new message ID
+                    if event.reply_to and event.reply_to.reply_to_msg_id in FILE_STORE_RESPONSES:
+                        original_data = FILE_STORE_RESPONSES[event.reply_to.reply_to_msg_id]
+                        FILE_STORE_RESPONSES[forwarded.id] = {
+                            'original_link': original_data['original_link'],
+                            'last_message_time': asyncio.get_event_loop().time()
+                        }
+                else:
+                    logger.error("Failed to forward to file store bot")
+
+    except Exception as e:
+        logger.error(f"Error handling downloader response: {str(e)}")
 
 async def handle_file_store_response(event: Message):
     """Handle responses from the file store bot."""
@@ -241,9 +244,9 @@ async def handle_file_store_response(event: Message):
             recent_id = None
             
             # Find the most recent pending response within last 60 seconds
-            for msg_id, data in link_processor.file_store_responses.items():
+            for msg_id, data in FILE_STORE_RESPONSES.items():
                 if current_time - data['last_message_time'] < 60:  # Within last 60 seconds
-                    if not recent_response or data['last_message_time'] > link_processor.file_store_responses[recent_id]['last_message_time']:
+                    if not recent_response or data['last_message_time'] > FILE_STORE_RESPONSES[recent_id]['last_message_time']:
                         recent_response = data
                         recent_id = msg_id
             
@@ -251,8 +254,8 @@ async def handle_file_store_response(event: Message):
                 try:
                     # Get the original thumbnail for this link
                     original_link = recent_response.get('original_link')
-                    if original_link and original_link in link_processor.link_thumbnail_map:
-                        thumbnail_data = link_processor.link_thumbnail_map[original_link]
+                    if original_link and original_link in LINK_THUMBNAIL_MAP:
+                        thumbnail_data = LINK_THUMBNAIL_MAP[original_link]
                         logger.info(f"Found saved thumbnail for link: {original_link}")
                         
                         # Create temporary file for the saved thumbnail
@@ -272,7 +275,7 @@ async def handle_file_store_response(event: Message):
                             
                             # Cleanup
                             os.unlink(temp_thumb.name)
-                            
+                            del LINK_THUMBNAIL_MAP[original_link]
                     else:
                         # If no thumbnail found, send just the message
                         await client.send_message(
@@ -282,12 +285,9 @@ async def handle_file_store_response(event: Message):
                         )
                         logger.info("Sent file store link (no thumbnail available)")
                     
-                    # Mark as complete and cleanup
-                    if recent_response.get('complete_event'):
-                        recent_response['complete_event'].set()
-                    
-                    if recent_id in link_processor.file_store_responses:
-                        del link_processor.file_store_responses[recent_id]
+                    # Cleanup tracking data
+                    if recent_id in FILE_STORE_RESPONSES:
+                        del FILE_STORE_RESPONSES[recent_id]
                     
                 except Exception as e:
                     logger.error(f"Error sending to destination: {str(e)}")
@@ -376,6 +376,11 @@ client.add_event_handler(
 )
 
 client.add_event_handler(
+    handle_downloader_response,
+    events.NewMessage(from_users=DOWNLOADER_BOT_USERNAME)
+)
+
+client.add_event_handler(
     handle_file_store_response,
     events.NewMessage(from_users=FILE_STORE_BOT_USERNAME)
 )
@@ -386,7 +391,7 @@ async def main():
         print("Bot has started.")
         
         # Start the queue processor
-        queue_processor = asyncio.create_task(link_processor.process_next())
+        queue_processor = asyncio.create_task(process_queue())
         
         # Start the client
         await client.start()
