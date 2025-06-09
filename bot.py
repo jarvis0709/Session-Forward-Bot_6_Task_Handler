@@ -39,6 +39,27 @@ FILE_STORE_RESPONSES: Dict[int, dict] = {}
 CURRENT_PROCESSING = None
 PROCESSING_LOCK = asyncio.Lock()
 
+# Allowed MIME types for forwarding
+ALLOWED_MIME_TYPES = {
+    'video/', 
+    'audio/',
+    'application/',  # For general files
+}
+
+def is_allowed_media(message: Message) -> bool:
+    """Check if the media type is allowed for forwarding."""
+    if not message.media or not isinstance(message.media, MessageMediaDocument):
+        return False
+        
+    mime_type = message.media.document.mime_type
+    
+    # Check for GIF
+    if mime_type == 'image/gif':
+        return True
+        
+    # Check for videos, audio, and files
+    return any(mime_type.startswith(allowed_type) for allowed_type in ALLOWED_MIME_TYPES)
+
 class Config:
     def __init__(self):
         self.load_config()
@@ -73,15 +94,21 @@ except Exception as ap:
     logging.error(f"Error initializing Telethon client: {ap}")
     exit(1)
 
-async def extract_terabox_links(text: str) -> List[str]:
-    """Extract Terabox links from text without modifying them."""
-    if not text:
+async def extract_terabox_links(message: Message) -> List[str]:
+    """Extract Terabox links from message text."""
+    if not message.text and not message.caption:
         return []
         
-    # Strip any formatting to handle bold/italic text
-    clean_text = strip_text(text)
+    # Get text and entities from message
+    text = message.text or message.caption
+    
+    # Handle bold/formatted text by getting raw text
+    if message.entities:
+        # Get text without formatting
+        text = message.raw_text
+        
     pattern = r'(?:https?://(?:www\.)?(?:1024terabox\.com|terabox\.com|teraboxlink\.com|terafileshare\.com|teraboxshare\.com|teraboxapp\.com)/\S+)'
-    matches = re.finditer(pattern, clean_text)
+    matches = re.finditer(pattern, text)
     return [match.group(0) for match in matches]
 
 async def process_message(event: Message):
@@ -100,10 +127,9 @@ async def message_processor():
         try:
             # Get message from queue
             message = await MESSAGE_QUEUE.get()
-            text = message.text or message.caption or ""
             
             # Extract links
-            terabox_links = await extract_terabox_links(text)
+            terabox_links = await extract_terabox_links(message)
             
             if terabox_links:
                 logger.info(f"Found {len(terabox_links)} Terabox links in message")
@@ -120,7 +146,7 @@ async def message_processor():
                 # Add to link processing queue
                 await LINK_QUEUE.put({
                     'links': terabox_links,
-                    'text': text,
+                    'text': message.text or message.caption or "",
                     'thumbnail': thumbnail,
                     'original_message': message
                 })
@@ -212,25 +238,24 @@ async def process_single_link(link: str, text: str, thumbnail: Optional[bytes] =
 async def handle_downloader_response(event: Message):
     """Handle responses from the downloader bot."""
     try:
-        # Check if the message has media and is a document
-        if event.media and isinstance(event.media, MessageMediaDocument):
-            mime_type = event.media.document.mime_type
-            # Check if it's a video or document
-            if mime_type.startswith('video/') or not mime_type.startswith('image/'):
-                # Forward to file store bot
-                forwarded = await event.forward_to(FILE_STORE_BOT_USERNAME)
-                if forwarded:
-                    logger.info(f"Forwarded file to file store bot with ID: {forwarded.id}")
-                    
-                    # Transfer the tracking data to new message ID
-                    if event.reply_to and event.reply_to.reply_to_msg_id in FILE_STORE_RESPONSES:
-                        original_data = FILE_STORE_RESPONSES[event.reply_to.reply_to_msg_id]
-                        FILE_STORE_RESPONSES[forwarded.id] = {
-                            'original_link': original_data['original_link'],
-                            'last_message_time': asyncio.get_event_loop().time()
-                        }
-                else:
-                    logger.error("Failed to forward to file store bot")
+        # Check if the message has media and is allowed type
+        if event.media and is_allowed_media(event):
+            # Forward to file store bot
+            forwarded = await event.forward_to(FILE_STORE_BOT_USERNAME)
+            if forwarded:
+                logger.info(f"Forwarded file to file store bot with ID: {forwarded.id}")
+                
+                # Transfer the tracking data to new message ID
+                if event.reply_to and event.reply_to.reply_to_msg_id in FILE_STORE_RESPONSES:
+                    original_data = FILE_STORE_RESPONSES[event.reply_to.reply_to_msg_id]
+                    FILE_STORE_RESPONSES[forwarded.id] = {
+                        'original_link': original_data['original_link'],
+                        'last_message_time': asyncio.get_event_loop().time()
+                    }
+            else:
+                logger.error("Failed to forward to file store bot")
+        else:
+            logger.info("Skipping non-allowed media type")
 
     except Exception as e:
         logger.error(f"Error handling downloader response: {str(e)}")
